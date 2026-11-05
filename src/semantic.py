@@ -32,6 +32,13 @@ class C_Semantico(ISemantico):
         self._classes: Dict[str, Simbolo] = {}
         self._functions: Dict[str, Simbolo] = {}
         self._loop_depth = 0
+        self._class_attr_decls: Dict[str, Dict[str, VarDecl]] = {}
+        self._promocoes = 0
+        self._func_node: Optional[FuncDecl] = None
+        self._func_decls: Dict[str, FuncDecl] = {}
+        # (classe ou None, funcao) -> indices dos parametros que recebem valor real em
+        # alguma chamada. Persiste entre as rodadas da analise (ver analyze()).
+        self._params_reais: Dict[tuple, set] = {}
 
     # ---- Interface ISemantico ----
     def analisar(self, programa: Program) -> bool:
@@ -56,7 +63,12 @@ class C_Semantico(ISemantico):
 
     def _define_symbol(self, name: str, type_: str, line: int, params: Optional[List[str]] = None) -> None:
         if not self._tabela.definir(name, type_, line, params):
-            self._report(line, f"Variavel '{name}' ja declarada.")
+            existente = self._lookup(name)
+            if existente is not None and existente.tipo == "var" and existente.escopo.startswith(("funcao", "metodo")) \
+                    and existente.declaracao is None:
+                self._report(line, f"'{name}' ja e um parametro da funcao e nao pode ser redeclarado.")
+            else:
+                self._report(line, f"Variavel '{name}' ja declarada.")
 
     def _lookup(self, name: str) -> Optional[Simbolo]:
         return self._tabela.buscar(name)
@@ -95,10 +107,13 @@ class C_Semantico(ISemantico):
         if isinstance(node, MethodCall):
             return "unknown"
         if isinstance(node, FuncCallExpr):
-            if node.name in ("random", "exp"): return "number"
+            if node.name in ("random", "exp", "len", "to_int", "to_number", "clock"): return "number"
             if node.name in ("range", "parse_ints"): return "list"
+            if node.name in ("join_str", "str", "format"): return "string"
+            if node.name == "slice" and node.arguments: return self._infer_type(node.arguments[0])
             return "unknown"
-        if isinstance(node, IndexExpr): return "unknown"
+        if isinstance(node, IndexExpr):
+            return "string" if self._infer_type(node.object) == "string" else "unknown"
         return "unknown"
 
     def _types_compatible(self, declared: str, actual: str) -> bool:
@@ -111,8 +126,10 @@ class C_Semantico(ISemantico):
         for stmt in program.statements:
             if isinstance(stmt, FuncDecl):
                 self._functions[stmt.name] = Simbolo(stmt.name, "FUNC", stmt.line, parametros=list(stmt.params))
+                self._func_decls[stmt.name] = stmt
             elif isinstance(stmt, ClassDecl):
                 attrs = {a.name: a.type for a in stmt.attributes}
+                self._class_attr_decls[stmt.name] = {a.name: a for a in stmt.attributes}
                 methods = {m.name: m.params for m in stmt.methods}
                 self._classes[stmt.name] = Simbolo(stmt.name, "CLASS", stmt.line, atributos=attrs, metodos=methods)
 
@@ -126,11 +143,23 @@ class C_Semantico(ISemantico):
             if not self._types_compatible(declared_type, actual_type):
                 self._report(node.line, f"Tipo incompativel em '{node.name}': esperado {declared_type}, recebido {actual_type}.")
             self._define_symbol(node.name, declared_type, node.line)
+            sym = self._lookup(node.name)
+            if sym is not None and sym.declaracao is None:
+                sym.declaracao = node
+                sym.tipo_numerico = "float" if node.promover_double else self._numeric_kind(node.init_value)
+            if self._tabela.nivel() == 0:
+                # Variavel global: o gerador C++ precisa do tipo para declara-la antes das funcoes
+                node.escopo_global = True
+                node.tipo_cpp = self._tipo_cpp(node.init_value)
         elif isinstance(node, Assignment):
             sym = self._lookup(node.name)
             if sym is None:
                 self._report(node.line, f"Variavel '{node.name}' nao declarada.")
+            else:
+                self._verificar_global_em_funcao(sym, node.line)
             self.validate_node(node.value)
+            if sym is not None:
+                self._promover(sym.declaracao, node.value)
             if sym and not self._types_compatible(sym.tipo, self._infer_type(node.value)):
                 self._report(node.line, f"Tipo incompativel em atribuicao de '{node.name}'.")
         elif isinstance(node, PrintStmt):
@@ -145,6 +174,8 @@ class C_Semantico(ISemantico):
             self.validate_node(node.channel)
         elif isinstance(node, ListLiteral):
             for e in node.elements: self.validate_node(e)
+            if node.tipo_elemento is None and node.elements:
+                node.tipo_elemento = self._tipo_elementos(node.elements)
         elif isinstance(node, MatrixCreateExpr):
             self.validate_node(node.rows)
             self.validate_node(node.cols)
@@ -155,13 +186,20 @@ class C_Semantico(ISemantico):
         elif isinstance(node, IndexAssign):
             self.validate_node(node.target)
             self.validate_node(node.value)
+            if isinstance(node.target, IndexExpr):
+                self._registrar_elemento(node.target.object, node.value)
+                if isinstance(node.target.object, IndexExpr):
+                    self._registrar_elemento_matriz(node.target.object.object, node.value)
         elif isinstance(node, IdentifierExpr):
-            if self._lookup(node.name) is None:
+            sym = self._lookup(node.name)
+            if sym is None:
                 self._report(node.line, f"Variavel '{node.name}' nao declarada.")
+            else:
+                self._verificar_global_em_funcao(sym, node.line)
         elif isinstance(node, BinaryExpr):
             self.validate_node(node.left)
             self.validate_node(node.right)
-            if node.op in ("+", "-", "*", "/", "%"):
+            if node.op in ("+", "-", "*", "/", "//", "%", "&", "|", "^", "<<", ">>"):
                 lt, rt = self._infer_type(node.left), self._infer_type(node.right)
                 if node.op != "+" and (lt not in ("number", "int", "var", "unknown") or rt not in ("number", "int", "var", "unknown")):
                     self._report(node.line, f"Operador '{node.op}' exige operandos numericos.")
@@ -219,13 +257,30 @@ class C_Semantico(ISemantico):
             else:
                 self._enter_scope(f"funcao {node.name}")
             old_function = self._current_function
+            old_func_node, self._func_node = self._func_node, node
             self._current_function = node.name
-            for p in node.params: self._define_symbol(p, "var", node.line)
-            self.validate_node(node.body)
+            reais = self._params_reais.get((self._current_class, node.name), set())
+            for i, p in enumerate(node.params):
+                self._define_symbol(p, "var", node.line)
+                sym = self._lookup(p)
+                if sym is not None and i in reais:
+                    sym.tipo_numerico = "float"
+            # O corpo { } compartilha o escopo dos parametros (como no C++ e no Python):
+            # assim "func f(a) { var a = 1; }" e detectado como redeclaracao.
+            if isinstance(node.body, SeqBlock):
+                for stmt in node.body.statements: self.validate_node(stmt)
+            else:
+                self.validate_node(node.body)
             self._current_function = old_function
+            self._func_node = old_func_node
             self._exit_scope()
         elif isinstance(node, ReturnStmt):
             if node.value: self.validate_node(node.value)
+            func = self._func_node
+            if func is not None and node.value is not None and not func.retorno_real \
+                    and self._numeric_kind(node.value) == "float":
+                func.retorno_real = True
+                self._promocoes += 1
         elif isinstance(node, MethodCall):
             obj_type = self._infer_type(node.object)
             cls = self._classes.get(obj_type)
@@ -235,12 +290,18 @@ class C_Semantico(ISemantico):
                 self._report(node.line, f"Metodo '{node.method_name}' espera {len(cls.metodos[node.method_name])} argumento(s), recebeu {len(node.arguments)}.")
             self.validate_node(node.object)
             for arg in node.arguments: self.validate_node(arg)
+            if cls:
+                self._registrar_args_reais(obj_type, node.method_name, node.arguments)
+            if node.method_name in ("append", "push_back") and len(node.arguments) == 1:
+                self._registrar_elemento(node.object, node.arguments[0])
         elif isinstance(node, FuncCallExpr):
-            if node.name not in self._functions and node.name not in ("exp", "random", "range", "len", "to_number", "parse_ints"):
+            if node.name not in self._functions and node.name not in self.FUNCOES_NATIVAS:
                 self._report(node.line, f"Funcao '{node.name}' nao declarada.")
             elif node.name in self._functions and len(self._functions[node.name].parametros) != len(node.arguments):
                 self._report(node.line, f"Funcao '{node.name}' espera {len(self._functions[node.name].parametros)} argumento(s), recebeu {len(node.arguments)}.")
             for arg in node.arguments: self.validate_node(arg)
+            if node.name in self._functions:
+                self._registrar_args_reais(None, node.name, node.arguments)
         elif isinstance(node, PropertyAccess):
             self.validate_node(node.object)
             obj_type = self._infer_type(node.object)
@@ -254,6 +315,7 @@ class C_Semantico(ISemantico):
             cls = self._classes.get(obj_type)
             if cls and node.property_name not in cls.atributos:
                 self._report(node.line, f"Atributo '{node.property_name}' nao declarado em '{obj_type}'.")
+            self._promover(self._attr_decl(node.object, node.property_name), node.value)
         elif isinstance(node, NewExpr):
             if node.class_name not in self._classes:
                 self._report(node.line, f"Classe '{node.class_name}' nao declarada.")
@@ -264,6 +326,173 @@ class C_Semantico(ISemantico):
             if node.prompt: self.validate_node(node.prompt)
 
     def analyze(self, program: Program) -> bool:
-        self._collect_declarations(program)
-        for stmt in program.statements: self.validate_node(stmt)
+        # A promocao int -> double pode se propagar: em "y = x * 2", y so vira real
+        # depois que x foi promovido. Por isso a analise roda em rodadas ate que nenhuma
+        # nova promocao aconteca (as marcacoes ficam gravadas nos nos VarDecl da AST).
+        for _ in range(self.MAX_RODADAS):
+            self._nova_rodada()
+            self._collect_declarations(program)
+            for stmt in program.statements: self.validate_node(stmt)
+            if self._promocoes == 0:
+                break
         return not self.erros
+
+    MAX_RODADAS = 6
+
+    def _nova_rodada(self) -> None:
+        self._tabela = self._tabela.__class__()
+        self.erros = []
+        self._current_function = None
+        self._current_class = None
+        self._classes = {}
+        self._functions = {}
+        self._class_attr_decls = {}
+        self._loop_depth = 0
+        self._promocoes = 0
+        self._func_node = None
+
+    FUNCOES_NATIVAS = ("exp", "random", "range", "len", "to_number", "parse_ints", "slice", "join_str",
+                       "str", "format", "to_int", "clock")
+
+    # ---- Tipos das listas (elemento C++) ----
+    def _init_declarado(self, obj: ASTNode) -> Optional[ASTNode]:
+        """Expressao que inicializou a variavel/atributo 'obj', se conhecida."""
+        decl = None
+        if isinstance(obj, IdentifierExpr):
+            sym = self._lookup(obj.name)
+            decl = sym.declaracao if sym else None
+        elif isinstance(obj, PropertyAccess):
+            decl = self._attr_decl(obj.object, obj.property_name)
+        return decl.init_value if decl is not None else None
+
+    def _lista_declarada(self, obj: ASTNode) -> Optional[ListLiteral]:
+        """Literal de lista que inicializou a variavel/atributo 'obj', se houver."""
+        init = self._init_declarado(obj)
+        return init if isinstance(init, ListLiteral) else None
+
+    def _registrar_elemento_matriz(self, matriz: ASTNode, valor: ASTNode) -> None:
+        """m[i][j] = valor: lista de listas (ou matrix) de inteiros que recebe valor nao
+        inteiro passa a ser de reais, como as listas simples."""
+        if self._numeric_kind(valor) == "int":
+            return
+        raiz = self._init_declarado(matriz)
+        if isinstance(raiz, ListLiteral) and raiz.tipo_elemento == "std::vector<long long>":
+            raiz.tipo_elemento = "std::vector<double>"
+            for linha in raiz.elements:
+                if isinstance(linha, ListLiteral) and linha.tipo_elemento == "long long":
+                    linha.tipo_elemento = "double"
+            self._promocoes += 1
+        elif isinstance(raiz, MatrixCreateExpr) and not raiz.promover_double \
+                and self._numeric_kind(raiz.init_value) == "int":
+            raiz.promover_double = True
+            self._promocoes += 1
+
+    def _tipo_cpp(self, node: ASTNode) -> Optional[str]:
+        """Tipo C++ de um valor, quando o semantico consegue determinar."""
+        tipo = self._infer_type(node)
+        if tipo == "string": return "std::string"
+        if tipo == "bool": return "bool"
+        kind = self._numeric_kind(node)
+        if kind == "int": return "long long"
+        if kind == "float": return "double"
+        if tipo in self._classes: return f"std::shared_ptr<{tipo}>"
+        if isinstance(node, ListLiteral) and node.tipo_elemento:
+            return f"std::vector<{node.tipo_elemento}>"
+        return None
+
+    def _tipo_elementos(self, elementos: List[ASTNode]) -> Optional[str]:
+        tipos = [self._tipo_cpp(e) for e in elementos]
+        if all(t == "long long" for t in tipos): return "long long"
+        if all(t in ("long long", "double") for t in tipos): return "double"
+        if all(t == tipos[0] for t in tipos): return tipos[0]
+        return None   # o C++ deduz o tipo comum dos elementos
+
+    def _registrar_elemento(self, lista: ASTNode, valor: ASTNode) -> None:
+        """Ajusta o tipo dos elementos de uma lista ao receber 'valor' (indice ou append)."""
+        lit = self._lista_declarada(lista)
+        if lit is None:
+            return
+        if lit.tipo_elemento is None and not lit.elements:
+            tipo = self._tipo_cpp(valor)          # lista vazia: tipo do primeiro elemento
+            if tipo:
+                lit.tipo_elemento = tipo
+                self._promocoes += 1
+        elif lit.tipo_elemento == "long long" and self._numeric_kind(valor) != "int":
+            # Na duvida (valor real ou desconhecido), a lista numerica vira de reais,
+            # como era no MiniPar 2026.1 (toda lista era vector<double>).
+            lit.tipo_elemento = "double"
+            self._promocoes += 1
+
+    # ---- Inferencia numerica (int x float), para escolher o tipo C++ ----
+    FUNCOES_REAIS = ("exp", "random", "clock", "to_number")
+    FUNCOES_INTEIRAS = ("len", "to_int")
+
+    def _numeric_kind(self, node: Optional[ASTNode]) -> Optional[str]:
+        """Retorna "int", "float" ou None (nao numerico ou desconhecido)."""
+        if isinstance(node, NumberExpr):
+            return "float" if "." in node.value else "int"
+        if isinstance(node, UnaryExpr) and node.op in ("-", "+"):
+            return self._numeric_kind(node.operand)
+        if isinstance(node, BinaryExpr):
+            if node.op == "/":
+                return "float"                      # divisao real, como no Python 3
+            if node.op in ("&", "|", "^", "<<", ">>"):
+                return "int"
+            if node.op in ("+", "-", "*", "//", "%"):
+                lk, rk = self._numeric_kind(node.left), self._numeric_kind(node.right)
+                if "float" in (lk, rk): return "float"
+                if lk == "int" and rk == "int": return "int"
+            return None
+        if isinstance(node, IdentifierExpr):
+            sym = self._lookup(node.name)
+            return sym.tipo_numerico if sym else None
+        if isinstance(node, PropertyAccess):
+            decl = self._attr_decl(node.object, node.property_name)
+            if decl is not None:
+                return "float" if decl.promover_double else self._numeric_kind(decl.init_value)
+            return None
+        if isinstance(node, FuncCallExpr):
+            if node.name in self.FUNCOES_REAIS: return "float"
+            if node.name in self.FUNCOES_INTEIRAS: return "int"
+            decl = self._func_decls.get(node.name)
+            if decl is not None and decl.retorno_real: return "float"
+        if isinstance(node, IndexExpr):
+            lit = self._lista_declarada(node.object)
+            if lit is not None:
+                return {"long long": "int", "double": "float"}.get(lit.tipo_elemento)
+            if isinstance(node.object, IndexExpr):          # m[i][j]
+                raiz = self._init_declarado(node.object.object)
+                if isinstance(raiz, ListLiteral):
+                    return {"std::vector<long long>": "int", "std::vector<double>": "float"}.get(raiz.tipo_elemento)
+                if isinstance(raiz, MatrixCreateExpr):
+                    return "float" if raiz.promover_double else self._numeric_kind(raiz.init_value)
+        return None
+
+    def _attr_decl(self, obj: ASTNode, attr: str) -> Optional[VarDecl]:
+        cls_name = self._infer_type(obj)
+        return self._class_attr_decls.get(cls_name, {}).get(attr)
+
+    def _verificar_global_em_funcao(self, sym: Simbolo, linha: int) -> None:
+        """Funcoes so enxergam globais cujo tipo o compilador consegue determinar."""
+        decl = sym.declaracao
+        if (self._current_function and isinstance(decl, VarDecl) and decl.escopo_global
+                and not decl.promover_double and decl.tipo_cpp is None):
+            self._report(linha, f"Variavel global '{sym.nome}' usada em funcao, mas seu tipo nao "
+                                f"pode ser determinado. Inicialize-a com um valor literal "
+                                f"(ex.: 0, 0.0, \"\", [] ou new Classe()).")
+
+    def _registrar_args_reais(self, classe: Optional[str], funcao: str, argumentos: List[ASTNode]) -> None:
+        """Se uma chamada passa um valor real, o parametro correspondente e real."""
+        reais = self._params_reais.setdefault((classe, funcao), set())
+        for i, arg in enumerate(argumentos):
+            if i not in reais and self._numeric_kind(arg) == "float":
+                reais.add(i)
+                self._promocoes += 1
+
+    def _promover(self, decl: Optional[VarDecl], valor: ASTNode) -> None:
+        """Marca a declaracao como double se ela recebe um valor real."""
+        if decl is None or decl.promover_double:
+            return
+        if self._numeric_kind(valor) == "float":
+            decl.promover_double = True
+            self._promocoes += 1

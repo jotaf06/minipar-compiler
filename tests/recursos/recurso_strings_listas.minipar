@@ -1,0 +1,64 @@
+# Strings e listas do MiniPar 2026.2
+
+class Produto {
+    var nome = "";
+    var precos = [];
+    func adicionar(preco) { this.precos.append(preco); }
+}
+
+seq {
+    # Concatenacao de strings, inclusive com numeros
+    var linha = "";
+    linha = linha + "ab";
+    linha = linha + "cd";
+    print("concatenacao:", linha, "| com numero:", "Aluno " + 7);
+
+    # Indexacao e tamanho de string (fractal ASCII do teste 9)
+    var caracteres = " .:-=+#%@";
+    var desenho = "";
+    var i = 0;
+    while (i < len(caracteres)) {
+        desenho = desenho + caracteres[len(caracteres) - 1 - i];
+        i = i + 1;
+    }
+    print("invertido: [" + desenho + "]", "| ultimo:", caracteres[-1]);
+    print("comparacao:", "abc" < "abd", "abc" == "abc");
+
+    # Lista de strings e lista vazia com o tipo do primeiro append
+    var avaliadores = ["Professor", "Monitor 1", "Monitor 2"];
+    avaliadores.append("Monitor 3");
+    var resultados = [];
+    for (var a in avaliadores) {
+        resultados.append("[" + a + "] ok");
+    }
+    print(join_str(resultados, ", "));
+
+    # Fatias (lista[a:b] do Python) e concatenacao de listas
+    var tarefas = [10, 20, 30, 40, 50, 60, 70, 80];
+    var tamanho_fatia = len(tarefas) // 4;
+    var k = 0;
+    while (k < 4) {
+        print("fatia", k, ":", slice(tarefas, k * tamanho_fatia, (k + 1) * tamanho_fatia));
+        k = k + 1;
+    }
+    print("concatenadas:", [1, 2] + [3]);
+    print("fatia de texto:", slice("MiniPar", 0, 4));
+
+    # Lista de inteiros que recebe real vira lista de reais
+    var medias = [0, 0];
+    medias[0] = 7.5;
+    print("medias:", medias);
+
+    # Escrita alem do fim aumenta a lista (pilha)
+    var pilha = [0, 4];
+    pilha[2] = 1;
+    pilha[3] = 3;
+    print("pilha:", pilha, "tamanho", len(pilha));
+
+    # Atributo lista vazia preenchido por metodo
+    var p = new Produto();
+    p.nome = "Caderno";
+    p.adicionar(12.5);
+    p.adicionar(9.9);
+    print(p.nome, p.precos);
+}

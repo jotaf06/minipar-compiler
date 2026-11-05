@@ -31,22 +31,44 @@ class C_GeradorCpp(IGeradorCpp):
             else: res.append(ch)
         return "".join(res)
 
+    # Operadores com semantica do Python implementados por funcoes do template C++
+    OPERADORES_FUNCAO = {"/": "__div", "//": "__floordiv", "%": "__mod"}
+    OPERADORES_BIT = ("&", "|", "^", "<<", ">>")
+
+    @staticmethod
+    def _translate_number(value: str) -> str:
+        """Inteiros viram long long (64 bits), evitando o estouro do int de 32 bits."""
+        if value.lower().startswith("0x"):
+            return f"{int(value, 16)}LL"
+        if "." in value:
+            return value
+        return f"{value}LL"
+
     def _translate_expression(self, node: Optional[ASTNode]) -> str:
         if node is None: return "0"
-        if isinstance(node, NumberExpr): return node.value
-        if isinstance(node, StringExpr): return f'"{self._escape_string(node.value)}"'
+        if isinstance(node, NumberExpr): return self._translate_number(node.value)
+        # std::string (e nao const char*): permite concatenar, comparar e indexar
+        if isinstance(node, StringExpr): return f'std::string("{self._escape_string(node.value)}")'
         if isinstance(node, BoolExpr): return "true" if node.value else "false"
         if isinstance(node, IdentifierExpr): return node.name
         if isinstance(node, UnaryExpr): return f"({node.op}{self._translate_expression(node.operand)})"
         if isinstance(node, BinaryExpr):
-            return f"({self._translate_expression(node.left)} {node.op} {self._translate_expression(node.right)})"
+            left = self._translate_expression(node.left)
+            right = self._translate_expression(node.right)
+            if node.op in self.OPERADORES_FUNCAO:
+                return f"{self.OPERADORES_FUNCAO[node.op]}({left}, {right})"
+            if node.op in self.OPERADORES_BIT:
+                return f"(__as_int({left}) {node.op} __as_int({right}))"
+            if node.op == "+":
+                return f"__add({left}, {right})"   # numeros, strings (com conversao) ou listas
+            return f"({left} {node.op} {right})"
         
         if isinstance(node, NewExpr):
             args = ", ".join(self._translate_expression(a) for a in node.arguments)
             return f"std::make_shared<{node.class_name}>({args})"
         if isinstance(node, ThisExpr): return "this"
         if isinstance(node, PropertyAccess):
-            if node.property_name == "size": return f"{self._translate_expression(node.object)}.size()"
+            if node.property_name == "size": return f"__len({self._translate_expression(node.object)})"
             return f"{self._translate_expression(node.object)}->{node.property_name}"
         
         if isinstance(node, MethodCall):
@@ -54,7 +76,7 @@ class C_GeradorCpp(IGeradorCpp):
             m_name = node.method_name
             if m_name in ("append", "push_back"): return f"{self._translate_expression(node.object)}.push_back({args})"
             if m_name == "pop": return f"__array_pop({self._translate_expression(node.object)})"
-            if m_name == "size": return f"{self._translate_expression(node.object)}.size()"
+            if m_name == "size": return f"__len({self._translate_expression(node.object)})"
             return f"{self._translate_expression(node.object)}->{m_name}({args})"
         
         if isinstance(node, FuncCallExpr):
@@ -64,13 +86,25 @@ class C_GeradorCpp(IGeradorCpp):
             if node.name == "random":
                 return "random_val()"
             if node.name == "len":
-                return f"{self._translate_expression(node.arguments[0])}.size()"
+                return f"__len({self._translate_expression(node.arguments[0])})"
             if node.name == "range":
                 return f"__minipar_range({args})"
             if node.name == "to_number":
-                return f"std::stod({args})"
+                return f"__to_number({args})"
+            if node.name == "to_int":
+                return f"__to_int({args})"
+            if node.name == "str":
+                return f"__str({args})"
+            if node.name == "format":
+                return f"__format({args})"
+            if node.name == "clock":
+                return "__clock()"
             if node.name == "parse_ints":
                 return f"__parse_ints({args})"
+            if node.name == "slice":
+                return f"__slice({args})"
+            if node.name == "join_str":
+                return f"__join_str({args})"
             return f"{node.name}({args})"
 
         if isinstance(node, CChannelExpr):
@@ -86,18 +120,42 @@ class C_GeradorCpp(IGeradorCpp):
 
         if isinstance(node, ListLiteral):
             elems = ", ".join(self._translate_expression(e) for e in node.elements)
-            return f"std::vector<double>{{{elems}}}"
+            if node.tipo_elemento:                       # tipo decidido pelo semantico
+                return f"__lista_t<{node.tipo_elemento}>({elems})"
+            if not node.elements:                        # lista vazia sem uso conhecido
+                return "std::vector<double>{}"
+            return f"__lista({elems})"                   # C++ deduz o tipo comum
         if isinstance(node, MatrixCreateExpr):
             r = self._translate_expression(node.rows)
             c = self._translate_expression(node.cols)
             v = self._translate_expression(node.init_value)
+            if node.promover_double:
+                v = f"static_cast<double>({v})"
             return f"__make_matrix({r}, {c}, {v})"
         if isinstance(node, IndexExpr):
             obj = self._translate_expression(node.object)
             idx = self._translate_expression(node.index)
-            return f"{obj}[{idx}]"
+            return f"__index({obj}, {idx})"   # leitura com verificacao de limites
 
         return "0"
+
+    def _translate_index_target(self, target: ASTNode) -> str:
+        """Destino de lista[i] = v: escrita alem do fim aumenta a lista (pilha que cresce)."""
+        if isinstance(target, IndexExpr):
+            obj = self._translate_expression(target.object)
+            idx = self._translate_expression(target.index)
+            return f"__index_set({obj}, {idx})"
+        return self._translate_expression(target)
+
+    @staticmethod
+    def _global_tipada(node: ASTNode) -> bool:
+        """Variavel do topo do programa com tipo conhecido: vira global no C++."""
+        return (isinstance(node, VarDecl) and node.escopo_global
+                and (node.promover_double or node.tipo_cpp is not None))
+
+    @staticmethod
+    def _decl_type(node: VarDecl) -> str:
+        return "double" if node.promover_double else "auto"
 
     def _has_value_return(self, node: Optional[ASTNode]) -> bool:
         if node is None: return False
@@ -130,11 +188,13 @@ class C_GeradorCpp(IGeradorCpp):
             return self._uses_float_return(node.value)
         return False
 
-    def _return_type(self, body: Optional[ASTNode]) -> str:
+    def _return_type(self, func: FuncDecl) -> str:
+        body = func.body
         if not self._has_value_return(body):
             return "void"
-        # auto falha no g++ quando há return double e return 0 (int) na mesma função
-        if self._uses_float_return(body):
+        # auto falha no g++ quando há return double e return 0 (int) na mesma função;
+        # retorno_real vem do semantico (ex.: return de uma variavel promovida a double)
+        if func.retorno_real or self._uses_float_return(body):
             return "double"
         return "auto"
 
@@ -142,14 +202,14 @@ class C_GeradorCpp(IGeradorCpp):
         if node is None: return ""
         if isinstance(node, VarDecl):
             expr = self._translate_expression(node.init_value) if node.init_value else "0"
-            return f"{indent}auto {node.name} = {expr};\n"
+            return f"{indent}{self._decl_type(node)} {node.name} = {expr};\n"
         if isinstance(node, Assignment):
             return f"{indent}{node.name} = {self._translate_expression(node.value)};\n"
         if isinstance(node, PropertyAssign):
             obj = self._translate_expression(node.object)
             return f"{indent}{obj}->{node.property_name} = {self._translate_expression(node.value)};\n"
         if isinstance(node, IndexAssign):
-            tgt = self._translate_expression(node.target)
+            tgt = self._translate_index_target(node.target)
             return f"{indent}{tgt} = {self._translate_expression(node.value)};\n"
         
         if isinstance(node, (MethodCall, FuncCallExpr)):
@@ -168,12 +228,9 @@ class C_GeradorCpp(IGeradorCpp):
             return f"{indent}{chan}->sendData(__to_string({msg}));\n"
 
         if isinstance(node, PrintStmt):
-            parts = []
-            for i, arg in enumerate(node.arguments):
-                if i > 0:
-                    parts.append(' << " "')
-                parts.append(f" << {self._translate_expression(arg)}")
-            return f"{indent}std::cout{ ''.join(parts) } << std::endl;\n"
+            # __print monta a linha no formato do Python e a escreve de uma vez (thread-safe)
+            args = ", ".join(self._translate_expression(arg) for arg in node.arguments)
+            return f"{indent}__print({args});\n"
         
         if isinstance(node, SeqBlock):
             lines = [f"{indent}{{\n"]
@@ -222,32 +279,47 @@ class C_GeradorCpp(IGeradorCpp):
         if node is None: return ""
         if isinstance(node, VarDecl):
             expr = self._translate_expression(node.init_value) if node.init_value else "0"
-            return f"auto {node.name} = {expr}"
+            return f"{self._decl_type(node)} {node.name} = {expr}"
         if isinstance(node, Assignment):
             return f"{node.name} = {self._translate_expression(node.value)}"
         if isinstance(node, PropertyAssign):
             return f"{self._translate_expression(node.object)}->{node.property_name} = {self._translate_expression(node.value)}"
         if isinstance(node, IndexAssign):
-            return f"{self._translate_expression(node.target)} = {self._translate_expression(node.value)}"
+            return f"{self._translate_index_target(node.target)} = {self._translate_expression(node.value)}"
         return self._translate_expression(node)
 
     # ---- Interface IGeradorCpp ----
     def gerar(self, programa: Program) -> str:
         program = programa
         cpp_code = _CPP_HEADER
-        
+
+        # Declaracao antecipada das classes: globais e funcoes podem referencia-las
+        for node in program.statements:
+            if isinstance(node, ClassDecl):
+                cpp_code += f"class {node.name};\n"
+
+        # Variaveis globais (var no topo do programa): declaradas aqui, antes das classes
+        # e funcoes que as usam, e inicializadas no main() na ordem original do programa
+        # (globais de tipo desconhecido continuam locais do main(); o semantico impede
+        #  que funcoes as usem)
+        for node in program.statements:
+            if self._global_tipada(node):
+                cpp_code += f"{'double' if node.promover_double else node.tipo_cpp} {node.name};\n"
+        cpp_code += "\n"
+
         for node in program.statements:
             if isinstance(node, ClassDecl):
                 cpp_code += f"class {node.name}" + (f" : public {node.superclass}" if node.superclass else "") + " {\npublic:\n"
                 for attr in node.attributes:
                     if attr.init_value:
                         init = self._translate_expression(attr.init_value)
-                        cpp_code += f"    decltype({init}) {attr.name} = {init};\n"
+                        tipo = "double" if attr.promover_double else f"decltype({init})"
+                        cpp_code += f"    {tipo} {attr.name} = {init};\n"
                     else:
                         cpp_code += f"    double {attr.name} = 0;\n"
                 for method in node.methods:
                     params = ", ".join(f"auto {p}" for p in method.params)
-                    ret = self._return_type(method.body)
+                    ret = self._return_type(method)
                     cpp_code += f"    {ret} {method.name}({params}) {{\n"
                     if isinstance(method.body, SeqBlock):
                         for stmt in method.body.statements: cpp_code += self._translate_statement(stmt, "        ")
@@ -256,7 +328,7 @@ class C_GeradorCpp(IGeradorCpp):
                 cpp_code += "};\n\n"
             elif isinstance(node, FuncDecl):
                 params = ", ".join(f"auto {p}" for p in node.params)
-                ret = self._return_type(node.body)
+                ret = self._return_type(node)
                 cpp_code += f"{ret} {node.name}({params}) {{\n"
                 if isinstance(node.body, SeqBlock):
                     for stmt in node.body.statements: cpp_code += self._translate_statement(stmt, "    ")
@@ -265,6 +337,10 @@ class C_GeradorCpp(IGeradorCpp):
 
         cpp_code += "int main() {\n    #ifdef _WIN32\n        WSADATA wsa;\n        WSAStartup(MAKEWORD(2,2), &wsa);\n    #endif\n\n"
         for node in program.statements:
+            if self._global_tipada(node):
+                expr = self._translate_expression(node.init_value) if node.init_value else "{}"
+                cpp_code += f"    {node.name} = {expr};\n"
+                continue
             if not isinstance(node, (ClassDecl, FuncDecl)):
                 if isinstance(node, SeqBlock):
                     for stmt in node.statements: cpp_code += self._translate_statement(stmt, "    ")

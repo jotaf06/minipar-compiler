@@ -1,0 +1,41 @@
+# Recursos numericos do MiniPar 2026.2 (semantica do Python 3)
+
+class Acumulador {
+    var total = 0;
+    func somar(v) { this.total = this.total + v; }
+}
+
+seq {
+    # Divisao real (/) e divisao inteira (//)
+    print("3 / 20 =", 3 / 20);
+    print("7 // 2 =", 7 // 2, "| -7 // 2 =", -7 // 2);
+
+    # Resto com o sinal do divisor
+    print("-7 % 3 =", -7 % 3, "| 7.5 % 2 =", 7.5 % 2);
+
+    # Inteiros de 64 bits e operadores bit a bit (gerador LCG do teste 8)
+    var estado = 123456789;
+    estado = (estado * 1103515245 + 12345) & 0x7FFFFFFF;
+    print("LCG:", estado);
+    print("bits:", 6 & 3, 6 | 3, 6 ^ 3, 1 << 10, 1024 >> 3);
+
+    # Promocao para real: a variavel comeca inteira e recebe valor real
+    var soma = 0;
+    var i = 0;
+    while (i < 4) {
+        soma = soma + 0.5;
+        i = i + 1;
+    }
+    print("soma:", soma);
+
+    # Propagacao: dobro depende de soma, que foi promovida
+    var dobro = 0;
+    dobro = soma * 2;
+    print("dobro:", dobro);
+
+    # Atributo inteiro promovido por atribuicao real
+    var acc = new Acumulador();
+    acc.somar(1.25);
+    acc.somar(1.25);
+    print("acumulador:", acc.total);
+}

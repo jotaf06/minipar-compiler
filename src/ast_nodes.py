@@ -44,6 +44,14 @@ class VarDecl(ASTNode):
     init_value: Optional[ASTNode] = None
     type: str = "var"
     line: int = 1
+    # Preenchido pelo semantico: a variavel comeca inteira, mas recebe um valor real
+    # em alguma atribuicao (ex.: soma = 0; soma = soma + 0.5). O gerador C++ a declara
+    # como double desde o inicio, como o Python faria.
+    promover_double: bool = False
+    # Preenchidos pelo semantico para variaveis declaradas no topo do programa
+    # (fora de blocos): viram variaveis globais no C++, visiveis nas funcoes.
+    escopo_global: bool = False
+    tipo_cpp: Optional[str] = None
 
 @dataclass
 class Assignment(ASTNode):
@@ -117,6 +125,8 @@ class FuncDecl(ASTNode):
     params: List[str]
     body: ASTNode
     line: int = 1
+    # Preenchido pelo semantico: algum return devolve um valor real (C++ retorna double)
+    retorno_real: bool = False
 
 @dataclass
 class ReturnStmt(ASTNode):
@@ -185,6 +195,9 @@ class InputExpr(ASTNode):
 class ListLiteral(ASTNode):
     elements: List[ASTNode]
     line: int = 1
+    # Tipo C++ dos elementos, preenchido pelo semantico ("long long", "double",
+    # "std::string", ...). None: o proprio C++ deduz a partir dos elementos.
+    tipo_elemento: Optional[str] = None
 
 @dataclass
 class MatrixCreateExpr(ASTNode):
@@ -192,6 +205,8 @@ class MatrixCreateExpr(ASTNode):
     cols: ASTNode
     init_value: ASTNode
     line: int = 1
+    # Preenchido pelo semantico: matriz criada com inteiro que recebe valores reais
+    promover_double: bool = False
 
 @dataclass
 class IndexExpr(ASTNode):

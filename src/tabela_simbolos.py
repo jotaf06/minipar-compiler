@@ -35,6 +35,9 @@ class Simbolo:
     parametros: List[str] = field(default_factory=list)
     atributos: Dict[str, str] = field(default_factory=dict)
     metodos: Dict[str, List[str]] = field(default_factory=dict)
+    # Usados pela inferencia numerica do semantico (nao aparecem em exportar()):
+    tipo_numerico: Optional[str] = None   # "int", "float" ou None (desconhecido)
+    declaracao: Any = None                # no VarDecl que declarou a variavel
 
 
 class C_TabelaSimbolos(ITabelaSimbolos):

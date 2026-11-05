@@ -64,6 +64,10 @@ class ITabelaSimbolos(ABC):
         """Procura o simbolo do escopo mais interno para o mais externo."""
 
     @abstractmethod
+    def nivel(self) -> int:
+        """Profundidade do escopo atual (0 = global)."""
+
+    @abstractmethod
     def exportar(self) -> List[Dict[str, Any]]:
         """Lista todos os simbolos ja declarados (para exibicao nas interfaces)."""
 
