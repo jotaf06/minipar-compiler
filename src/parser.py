@@ -1,7 +1,8 @@
 from __future__ import annotations
-from typing import List
+from typing import List, Optional
 from lexer import Token, TokenType
 from erros import ErroSintatico
+from interfaces import ISintatico
 from ast_nodes import (
     ASTNode, Program, VarDecl, Assignment, PrintStmt, SeqBlock, ParBlock, 
     BinaryExpr, UnaryExpr, NumberExpr, StringExpr, BoolExpr, IdentifierExpr, IfStmt, WhileStmt,
@@ -10,10 +11,23 @@ from ast_nodes import (
     CChannelExpr, SendStmt, ReceiveExpr, ListLiteral, MatrixCreateExpr, IndexExpr, IndexAssign
 )
 
-class Parser:
-    def __init__(self, tokens: List[Token]) -> None:
+class C_Sintatico(ISintatico):
+    """Componente Analisador Sintatico - implementa ISintatico.
+
+    Parser descendente recursivo: cada producao da gramatica BNF tem um
+    metodo _parse_*. A precedencia de operadores vem da cadeia
+    or -> and -> comparacao -> termo (+,-) -> fator (*,/,%) -> unario -> primario.
+    """
+
+    def __init__(self, tokens: Optional[List[Token]] = None) -> None:
+        self._tokens = tokens or []
+        self._pos = 0
+
+    # ---- Interface ISintatico ----
+    def analisar(self, tokens: List[Token]) -> Program:
         self._tokens = tokens
         self._pos = 0
+        return self.parse()
 
     def _peek(self) -> Token:
         if self._pos >= len(self._tokens): return self._tokens[-1]
@@ -401,3 +415,7 @@ class Parser:
             stmt = self._parse_statement()
             if stmt: prog.statements.append(stmt)
         return prog
+
+
+# Nome antigo mantido por compatibilidade
+Parser = C_Sintatico

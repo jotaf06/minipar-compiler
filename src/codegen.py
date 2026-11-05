@@ -1,6 +1,4 @@
 from __future__ import annotations
-import os
-import subprocess
 import sys
 from typing import Optional
 from ast_nodes import (
@@ -11,11 +9,20 @@ from ast_nodes import (
     CChannelExpr, SendStmt, ReceiveExpr, ListLiteral, MatrixCreateExpr, IndexExpr, IndexAssign
 )
 from cpp_template import _CPP_HEADER
+from interfaces import IGeradorCpp
+from compilador_gcc import C_CompiladorGcc
+from erros import ErroGeracao
 
-# Extensao do executavel gerado, conforme a plataforma (Windows: .exe; Linux/macOS: sem extensao)
-EXE_EXT = ".exe" if sys.platform == "win32" else ""
 
-class CppCodeGenerator:
+class C_GeradorCpp(IGeradorCpp):
+    """Componente Gerador de Codigo C++ - implementa IGeradorCpp.
+
+    Traduz a AST validada para C++20: classes MiniPar viram classes C++ com
+    std::shared_ptr, blocos par viram std::thread com join, e c_channel usa
+    a classe MiniParChannel (sockets TCP) definida em cpp_template.py.
+    Apenas GERA o texto; a compilacao fica no componente C_CompiladorGcc.
+    """
+
     @staticmethod
     def _escape_string(value: str) -> str:
         res = []
@@ -227,7 +234,9 @@ class CppCodeGenerator:
             return f"{self._translate_expression(node.target)} = {self._translate_expression(node.value)}"
         return self._translate_expression(node)
 
-    def generate(self, program: Program, output_name: str) -> bool:
+    # ---- Interface IGeradorCpp ----
+    def gerar(self, programa: Program) -> str:
+        program = programa
         cpp_code = _CPP_HEADER
         
         for node in program.statements:
@@ -264,20 +273,19 @@ class CppCodeGenerator:
                     for stmt in node.statements: cpp_code += self._translate_statement(stmt, "    ")
                 else: cpp_code += self._translate_statement(node, "    ")
         cpp_code += "\n    return 0;\n}\n"
+        return cpp_code
 
-        os.makedirs("output", exist_ok=True)
-        cpp_path = os.path.join("output", f"{output_name}.cpp")
-        exe_path = os.path.join("output", f"{output_name}{EXE_EXT}")
-
-        with open(cpp_path, "w", encoding="utf-8") as f: f.write(cpp_code)
-
+    def generate(self, program: Program, output_name: str) -> bool:
+        """Compatibilidade com o codigo 2026.1: gera o C++ e compila com g++."""
         print("[CODEGEN] Compilando via g++ com -std=c++20 e -O3...")
-        cmd = ["g++", "-std=c++20", "-O3", cpp_path, "-o", exe_path, "-pthread"]
-        if sys.platform == "win32":
-            cmd.append("-lws2_32")  # Winsock: necessario apenas no Windows
-        result = subprocess.run(cmd)
-        if result.returncode == 0:
-            print(f"[SUCESSO] Executavel: {exe_path}")
-            return True
-        print("[ERRO] Falha na compilacao.", file=sys.stderr)
-        return False
+        try:
+            exe_path = C_CompiladorGcc().compilar(self.gerar(program), output_name)
+        except ErroGeracao as erro:
+            print(erro, file=sys.stderr)
+            return False
+        print(f"[SUCESSO] Executavel: {exe_path}")
+        return True
+
+
+# Nome antigo mantido por compatibilidade
+CppCodeGenerator = C_GeradorCpp

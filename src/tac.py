@@ -1,6 +1,7 @@
 from __future__ import annotations
 import os
 from typing import Optional
+from interfaces import IGeradorTAC
 from ast_nodes import (
     ASTNode, Program, VarDecl, Assignment, PrintStmt, SeqBlock, ParBlock, BinaryExpr,
     UnaryExpr, NumberExpr, StringExpr, BoolExpr, IdentifierExpr, IfStmt, WhileStmt,
@@ -59,8 +60,18 @@ END:
 """
 
 
-class TACGenerator:
+class C_GeradorTAC(IGeradorTAC):
+    """Componente Gerador de Codigo Intermediario (TAC) - implementa IGeradorTAC.
+
+    Quebra expressoes em instrucoes de no maximo 3 enderecos usando
+    temporarios (t0, t1, ...) e traduz o fluxo de controle em rotulos e
+    desvios (goto / ifFalse ... goto).
+    """
+
     def __init__(self) -> None:
+        self._reset()
+
+    def _reset(self) -> None:
         self.lines: list[str] = []
         self.temp_count = 0
         self.label_count = 0
@@ -221,6 +232,11 @@ class TACGenerator:
             self._stmt(node.body)
             self._emit(f"endfunc {node.name}")
 
+    # ---- Interface IGeradorTAC ----
+    def gerar(self, programa: Program) -> str:
+        self._reset()
+        return self.generate_text(programa)
+
     def generate_text(self, program: Program) -> str:
         if any(isinstance(stmt, FuncDecl) and stmt.name == "quicksort_iterativo" for stmt in program.statements):
             return EXPECTED_QUICKSORT_TAC
@@ -235,3 +251,7 @@ class TACGenerator:
         with open(tac_path, "w", encoding="utf-8") as f:
             f.write(text)
         return tac_path
+
+
+# Nome antigo mantido por compatibilidade
+TACGenerator = C_GeradorTAC
