@@ -44,6 +44,10 @@ class VarDecl(ASTNode):
     init_value: Optional[ASTNode] = None
     type: str = "var"
     line: int = 1
+    # Preenchido pelo semantico: a variavel comeca inteira, mas recebe um valor real
+    # em alguma atribuicao (ex.: soma = 0; soma = soma + 0.5). O gerador C++ a declara
+    # como double desde o inicio, como o Python faria.
+    promover_double: bool = False
 
 @dataclass
 class Assignment(ASTNode):

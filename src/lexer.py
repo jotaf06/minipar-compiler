@@ -38,6 +38,12 @@ class TokenType(Enum):
     MINUS     = auto()
     STAR      = auto()
     SLASH     = auto()
+    DSLASH    = auto()   # //  divisao inteira (como no Python)
+    BIT_AND   = auto()   # &
+    BIT_OR    = auto()   # |
+    BIT_XOR   = auto()   # ^
+    SHL       = auto()   # <<
+    SHR       = auto()   # >>
     MOD       = auto()
     ASSIGN    = auto()
     EQ        = auto()
@@ -129,6 +135,10 @@ class C_Lexico(ILexico):
         if self._pos >= len(self._source): return "\0"
         return self._source[self._pos]
 
+    def _peek_next(self) -> str:
+        if self._pos + 1 >= len(self._source): return "\0"
+        return self._source[self._pos + 1]
+
     def _advance(self) -> str:
         ch = self._source[self._pos]
         self._pos += 1
@@ -165,6 +175,14 @@ class C_Lexico(ILexico):
                 while self._peek().isalnum() or self._peek() == "_": ident += self._advance()
                 ttype = KEYWORDS.get(ident, TokenType.IDENTIFIER)
                 tokens.append(self._make_token(ttype, ident, start_line, start_col))
+            elif ch == "0" and self._peek_next() in ("x", "X"):
+                # Literal hexadecimal: 0x7FFFFFFF (o lexema guarda o texto original)
+                num = self._advance() + self._advance()
+                while self._peek() in "0123456789abcdefABCDEF" and self._peek() != "\0":
+                    num += self._advance()
+                if len(num) == 2:
+                    raise ErroLexico("Literal hexadecimal sem digitos apos '0x'", start_line, start_col)
+                tokens.append(self._make_token(TokenType.NUMBER, num, start_line, start_col))
             elif ch.isdigit():
                 num = ""
                 while self._peek().isdigit(): num += self._advance()
@@ -203,23 +221,32 @@ class C_Lexico(ILexico):
                     if self._peek() == "&":
                         self._advance()
                         tokens.append(self._make_token(TokenType.AND, "&&", start_line, start_col))
-                    else:
-                        raise ErroLexico("Caractere invalido: '&' (use '&&' para E logico)", start_line, start_col)
+                    else: tokens.append(self._make_token(TokenType.BIT_AND, "&", start_line, start_col))
                 elif op == "|":
                     if self._peek() == "|":
                         self._advance()
                         tokens.append(self._make_token(TokenType.OR, "||", start_line, start_col))
-                    else:
-                        raise ErroLexico("Caractere invalido: '|' (use '||' para OU logico)", start_line, start_col)
+                    else: tokens.append(self._make_token(TokenType.BIT_OR, "|", start_line, start_col))
+                elif op == "^":
+                    tokens.append(self._make_token(TokenType.BIT_XOR, "^", start_line, start_col))
+                elif op == "/" and self._peek() == "/":
+                    self._advance()
+                    tokens.append(self._make_token(TokenType.DSLASH, "//", start_line, start_col))
                 elif op == "<":
                     if self._peek() == "=":
                         self._advance()
                         tokens.append(self._make_token(TokenType.LTE, "<=", start_line, start_col))
+                    elif self._peek() == "<":
+                        self._advance()
+                        tokens.append(self._make_token(TokenType.SHL, "<<", start_line, start_col))
                     else: tokens.append(self._make_token(TokenType.LT, "<", start_line, start_col))
                 elif op == ">":
                     if self._peek() == "=":
                         self._advance()
                         tokens.append(self._make_token(TokenType.GTE, ">=", start_line, start_col))
+                    elif self._peek() == ">":
+                        self._advance()
+                        tokens.append(self._make_token(TokenType.SHR, ">>", start_line, start_col))
                     else: tokens.append(self._make_token(TokenType.GT, ">", start_line, start_col))
                 elif op in single_map:
                     tokens.append(self._make_token(single_map[op], op, start_line, start_col))

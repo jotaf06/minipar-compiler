@@ -50,17 +50,68 @@ std::vector<double> __parse_ints(const std::string& s) {
     return result;
 }
 
-std::vector<int> __minipar_range(int end) {
-    std::vector<int> values;
-    for (int i = 0; i < end; ++i) values.push_back(i);
+std::vector<long long> __minipar_range(long long end) {
+    std::vector<long long> values;
+    for (long long i = 0; i < end; ++i) values.push_back(i);
     return values;
 }
 
-std::vector<int> __minipar_range(int start, int end) {
-    std::vector<int> values;
-    for (int i = start; i < end; ++i) values.push_back(i);
+std::vector<long long> __minipar_range(long long start, long long end) {
+    std::vector<long long> values;
+    for (long long i = start; i < end; ++i) values.push_back(i);
     return values;
 }
+
+// ---------------------------------------------------------------------------
+// Erros em tempo de execucao: mensagem clara e fim do programa (como o Python)
+// ---------------------------------------------------------------------------
+[[noreturn]] void __erro_execucao(const std::string& msg) {
+    std::cout.flush();
+    std::cerr << "[ERRO DE EXECUCAO] " << msg << std::endl;
+    std::exit(1);
+}
+
+// ---------------------------------------------------------------------------
+// Operadores numericos com a semantica do Python 3
+// ---------------------------------------------------------------------------
+// a / b  -> divisao real (3 / 2 == 1.5)
+template<typename A, typename B>
+inline double __div(A a, B b) {
+    if (b == 0) __erro_execucao("Divisao por zero");
+    return static_cast<double>(a) / static_cast<double>(b);
+}
+
+// a // b -> divisao inteira arredondada para baixo (-7 // 2 == -4)
+template<typename A, typename B>
+inline auto __floordiv(A a, B b) {
+    if (b == 0) __erro_execucao("Divisao inteira por zero");
+    if constexpr (std::is_integral_v<A> && std::is_integral_v<B>) {
+        long long q = static_cast<long long>(a) / static_cast<long long>(b);
+        if ((a % b != 0) && ((a < 0) != (b < 0))) q--;
+        return q;
+    } else {
+        return std::floor(static_cast<double>(a) / static_cast<double>(b));
+    }
+}
+
+// a % b  -> resto com o sinal do divisor (-7 % 3 == 2), tambem para reais
+template<typename A, typename B>
+inline auto __mod(A a, B b) {
+    if (b == 0) __erro_execucao("Modulo por zero");
+    if constexpr (std::is_integral_v<A> && std::is_integral_v<B>) {
+        long long r = static_cast<long long>(a) % static_cast<long long>(b);
+        if (r != 0 && ((r < 0) != (b < 0))) r += b;
+        return r;
+    } else {
+        double r = std::fmod(static_cast<double>(a), static_cast<double>(b));
+        if (r != 0 && ((r < 0) != (b < 0))) r += b;
+        return r;
+    }
+}
+
+// Operadores bit a bit (&, |, ^, <<, >>) sempre sobre inteiros de 64 bits
+template<typename T>
+inline long long __as_int(T v) { return static_cast<long long>(v); }
 
 // Helper para Arrays (.pop) do Python
 template<typename T>

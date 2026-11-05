@@ -32,6 +32,11 @@ class C_Semantico(ISemantico):
         self._classes: Dict[str, Simbolo] = {}
         self._functions: Dict[str, Simbolo] = {}
         self._loop_depth = 0
+        self._class_attr_decls: Dict[str, Dict[str, VarDecl]] = {}
+        self._promocoes = 0
+        # (classe ou None, funcao) -> indices dos parametros que recebem valor real em
+        # alguma chamada. Persiste entre as rodadas da analise (ver analyze()).
+        self._params_reais: Dict[tuple, set] = {}
 
     # ---- Interface ISemantico ----
     def analisar(self, programa: Program) -> bool:
@@ -113,6 +118,7 @@ class C_Semantico(ISemantico):
                 self._functions[stmt.name] = Simbolo(stmt.name, "FUNC", stmt.line, parametros=list(stmt.params))
             elif isinstance(stmt, ClassDecl):
                 attrs = {a.name: a.type for a in stmt.attributes}
+                self._class_attr_decls[stmt.name] = {a.name: a for a in stmt.attributes}
                 methods = {m.name: m.params for m in stmt.methods}
                 self._classes[stmt.name] = Simbolo(stmt.name, "CLASS", stmt.line, atributos=attrs, metodos=methods)
 
@@ -126,11 +132,17 @@ class C_Semantico(ISemantico):
             if not self._types_compatible(declared_type, actual_type):
                 self._report(node.line, f"Tipo incompativel em '{node.name}': esperado {declared_type}, recebido {actual_type}.")
             self._define_symbol(node.name, declared_type, node.line)
+            sym = self._lookup(node.name)
+            if sym is not None and sym.declaracao is None:
+                sym.declaracao = node
+                sym.tipo_numerico = "float" if node.promover_double else self._numeric_kind(node.init_value)
         elif isinstance(node, Assignment):
             sym = self._lookup(node.name)
             if sym is None:
                 self._report(node.line, f"Variavel '{node.name}' nao declarada.")
             self.validate_node(node.value)
+            if sym is not None:
+                self._promover(sym.declaracao, node.value)
             if sym and not self._types_compatible(sym.tipo, self._infer_type(node.value)):
                 self._report(node.line, f"Tipo incompativel em atribuicao de '{node.name}'.")
         elif isinstance(node, PrintStmt):
@@ -161,7 +173,7 @@ class C_Semantico(ISemantico):
         elif isinstance(node, BinaryExpr):
             self.validate_node(node.left)
             self.validate_node(node.right)
-            if node.op in ("+", "-", "*", "/", "%"):
+            if node.op in ("+", "-", "*", "/", "//", "%", "&", "|", "^", "<<", ">>"):
                 lt, rt = self._infer_type(node.left), self._infer_type(node.right)
                 if node.op != "+" and (lt not in ("number", "int", "var", "unknown") or rt not in ("number", "int", "var", "unknown")):
                     self._report(node.line, f"Operador '{node.op}' exige operandos numericos.")
@@ -220,7 +232,12 @@ class C_Semantico(ISemantico):
                 self._enter_scope(f"funcao {node.name}")
             old_function = self._current_function
             self._current_function = node.name
-            for p in node.params: self._define_symbol(p, "var", node.line)
+            reais = self._params_reais.get((self._current_class, node.name), set())
+            for i, p in enumerate(node.params):
+                self._define_symbol(p, "var", node.line)
+                sym = self._lookup(p)
+                if sym is not None and i in reais:
+                    sym.tipo_numerico = "float"
             self.validate_node(node.body)
             self._current_function = old_function
             self._exit_scope()
@@ -235,12 +252,16 @@ class C_Semantico(ISemantico):
                 self._report(node.line, f"Metodo '{node.method_name}' espera {len(cls.metodos[node.method_name])} argumento(s), recebeu {len(node.arguments)}.")
             self.validate_node(node.object)
             for arg in node.arguments: self.validate_node(arg)
+            if cls:
+                self._registrar_args_reais(obj_type, node.method_name, node.arguments)
         elif isinstance(node, FuncCallExpr):
             if node.name not in self._functions and node.name not in ("exp", "random", "range", "len", "to_number", "parse_ints"):
                 self._report(node.line, f"Funcao '{node.name}' nao declarada.")
             elif node.name in self._functions and len(self._functions[node.name].parametros) != len(node.arguments):
                 self._report(node.line, f"Funcao '{node.name}' espera {len(self._functions[node.name].parametros)} argumento(s), recebeu {len(node.arguments)}.")
             for arg in node.arguments: self.validate_node(arg)
+            if node.name in self._functions:
+                self._registrar_args_reais(None, node.name, node.arguments)
         elif isinstance(node, PropertyAccess):
             self.validate_node(node.object)
             obj_type = self._infer_type(node.object)
@@ -254,6 +275,7 @@ class C_Semantico(ISemantico):
             cls = self._classes.get(obj_type)
             if cls and node.property_name not in cls.atributos:
                 self._report(node.line, f"Atributo '{node.property_name}' nao declarado em '{obj_type}'.")
+            self._promover(self._attr_decl(node.object, node.property_name), node.value)
         elif isinstance(node, NewExpr):
             if node.class_name not in self._classes:
                 self._report(node.line, f"Classe '{node.class_name}' nao declarada.")
@@ -264,6 +286,79 @@ class C_Semantico(ISemantico):
             if node.prompt: self.validate_node(node.prompt)
 
     def analyze(self, program: Program) -> bool:
-        self._collect_declarations(program)
-        for stmt in program.statements: self.validate_node(stmt)
+        # A promocao int -> double pode se propagar: em "y = x * 2", y so vira real
+        # depois que x foi promovido. Por isso a analise roda em rodadas ate que nenhuma
+        # nova promocao aconteca (as marcacoes ficam gravadas nos nos VarDecl da AST).
+        for _ in range(self.MAX_RODADAS):
+            self._nova_rodada()
+            self._collect_declarations(program)
+            for stmt in program.statements: self.validate_node(stmt)
+            if self._promocoes == 0:
+                break
         return not self.erros
+
+    MAX_RODADAS = 6
+
+    def _nova_rodada(self) -> None:
+        self._tabela = self._tabela.__class__()
+        self.erros = []
+        self._current_function = None
+        self._current_class = None
+        self._classes = {}
+        self._functions = {}
+        self._class_attr_decls = {}
+        self._loop_depth = 0
+        self._promocoes = 0
+
+    # ---- Inferencia numerica (int x float), para escolher o tipo C++ ----
+    FUNCOES_REAIS = ("exp", "random", "clock", "to_number")
+    FUNCOES_INTEIRAS = ("len", "to_int")
+
+    def _numeric_kind(self, node: Optional[ASTNode]) -> Optional[str]:
+        """Retorna "int", "float" ou None (nao numerico ou desconhecido)."""
+        if isinstance(node, NumberExpr):
+            return "float" if "." in node.value else "int"
+        if isinstance(node, UnaryExpr) and node.op in ("-", "+"):
+            return self._numeric_kind(node.operand)
+        if isinstance(node, BinaryExpr):
+            if node.op == "/":
+                return "float"                      # divisao real, como no Python 3
+            if node.op in ("&", "|", "^", "<<", ">>"):
+                return "int"
+            if node.op in ("+", "-", "*", "//", "%"):
+                lk, rk = self._numeric_kind(node.left), self._numeric_kind(node.right)
+                if "float" in (lk, rk): return "float"
+                if lk == "int" and rk == "int": return "int"
+            return None
+        if isinstance(node, IdentifierExpr):
+            sym = self._lookup(node.name)
+            return sym.tipo_numerico if sym else None
+        if isinstance(node, PropertyAccess):
+            decl = self._attr_decl(node.object, node.property_name)
+            if decl is not None:
+                return "float" if decl.promover_double else self._numeric_kind(decl.init_value)
+            return None
+        if isinstance(node, FuncCallExpr):
+            if node.name in self.FUNCOES_REAIS: return "float"
+            if node.name in self.FUNCOES_INTEIRAS: return "int"
+        return None
+
+    def _attr_decl(self, obj: ASTNode, attr: str) -> Optional[VarDecl]:
+        cls_name = self._infer_type(obj)
+        return self._class_attr_decls.get(cls_name, {}).get(attr)
+
+    def _registrar_args_reais(self, classe: Optional[str], funcao: str, argumentos: List[ASTNode]) -> None:
+        """Se uma chamada passa um valor real, o parametro correspondente e real."""
+        reais = self._params_reais.setdefault((classe, funcao), set())
+        for i, arg in enumerate(argumentos):
+            if i not in reais and self._numeric_kind(arg) == "float":
+                reais.add(i)
+                self._promocoes += 1
+
+    def _promover(self, decl: Optional[VarDecl], valor: ASTNode) -> None:
+        """Marca a declaracao como double se ela recebe um valor real."""
+        if decl is None or decl.promover_double:
+            return
+        if self._numeric_kind(valor) == "float":
+            decl.promover_double = True
+            self._promocoes += 1

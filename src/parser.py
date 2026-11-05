@@ -16,7 +16,8 @@ class C_Sintatico(ISintatico):
 
     Parser descendente recursivo: cada producao da gramatica BNF tem um
     metodo _parse_*. A precedencia de operadores vem da cadeia
-    or -> and -> comparacao -> termo (+,-) -> fator (*,/,%) -> unario -> primario.
+    or -> and -> comparacao -> | -> ^ -> & -> (<<,>>) -> termo (+,-) -> fator (*,/,//,%)
+    -> unario -> primario.
     """
 
     def __init__(self, tokens: Optional[List[Token]] = None) -> None:
@@ -278,13 +279,35 @@ class C_Sintatico(ISintatico):
         return expr
 
     def _parse_comparison(self) -> ASTNode:
-        expr = self._parse_term()
+        expr = self._parse_bit_or()
         while self._peek().type in (TokenType.EQ, TokenType.NEQ, TokenType.LT, TokenType.GT, TokenType.LTE, TokenType.GTE):
             op_tok = self._advance()
-            node = BinaryExpr(op=op_tok.lexeme, left=expr, right=self._parse_term())
+            node = BinaryExpr(op=op_tok.lexeme, left=expr, right=self._parse_bit_or())
             node.line = op_tok.line
             expr = node
         return expr
+
+    # Operadores bit a bit com a precedencia do Python (todos abaixo da comparacao):
+    #   comparacao < | < ^ < & < (<< >>) < (+ -) < (* / // %)
+    # Assim "x & 0xFF == 0" significa "(x & 0xFF) == 0", como no Python.
+    def _parse_binary_level(self, tipos, proximo) -> ASTNode:
+        expr = proximo()
+        while self._peek().type in tipos:
+            op_tok = self._advance()
+            expr = BinaryExpr(op=op_tok.lexeme, left=expr, right=proximo(), line=op_tok.line)
+        return expr
+
+    def _parse_bit_or(self) -> ASTNode:
+        return self._parse_binary_level((TokenType.BIT_OR,), self._parse_bit_xor)
+
+    def _parse_bit_xor(self) -> ASTNode:
+        return self._parse_binary_level((TokenType.BIT_XOR,), self._parse_bit_and)
+
+    def _parse_bit_and(self) -> ASTNode:
+        return self._parse_binary_level((TokenType.BIT_AND,), self._parse_shift)
+
+    def _parse_shift(self) -> ASTNode:
+        return self._parse_binary_level((TokenType.SHL, TokenType.SHR), self._parse_term)
 
     def _parse_term(self) -> ASTNode:
         expr = self._parse_factor()
@@ -297,7 +320,7 @@ class C_Sintatico(ISintatico):
 
     def _parse_factor(self) -> ASTNode:
         expr = self._parse_unary()
-        while self._peek().type in (TokenType.STAR, TokenType.SLASH, TokenType.MOD):
+        while self._peek().type in (TokenType.STAR, TokenType.SLASH, TokenType.DSLASH, TokenType.MOD):
             op_tok = self._advance()
             node = BinaryExpr(op=op_tok.lexeme, left=expr, right=self._parse_unary())
             node.line = op_tok.line

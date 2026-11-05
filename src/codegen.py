@@ -31,15 +31,34 @@ class C_GeradorCpp(IGeradorCpp):
             else: res.append(ch)
         return "".join(res)
 
+    # Operadores com semantica do Python implementados por funcoes do template C++
+    OPERADORES_FUNCAO = {"/": "__div", "//": "__floordiv", "%": "__mod"}
+    OPERADORES_BIT = ("&", "|", "^", "<<", ">>")
+
+    @staticmethod
+    def _translate_number(value: str) -> str:
+        """Inteiros viram long long (64 bits), evitando o estouro do int de 32 bits."""
+        if value.lower().startswith("0x"):
+            return f"{int(value, 16)}LL"
+        if "." in value:
+            return value
+        return f"{value}LL"
+
     def _translate_expression(self, node: Optional[ASTNode]) -> str:
         if node is None: return "0"
-        if isinstance(node, NumberExpr): return node.value
+        if isinstance(node, NumberExpr): return self._translate_number(node.value)
         if isinstance(node, StringExpr): return f'"{self._escape_string(node.value)}"'
         if isinstance(node, BoolExpr): return "true" if node.value else "false"
         if isinstance(node, IdentifierExpr): return node.name
         if isinstance(node, UnaryExpr): return f"({node.op}{self._translate_expression(node.operand)})"
         if isinstance(node, BinaryExpr):
-            return f"({self._translate_expression(node.left)} {node.op} {self._translate_expression(node.right)})"
+            left = self._translate_expression(node.left)
+            right = self._translate_expression(node.right)
+            if node.op in self.OPERADORES_FUNCAO:
+                return f"{self.OPERADORES_FUNCAO[node.op]}({left}, {right})"
+            if node.op in self.OPERADORES_BIT:
+                return f"(__as_int({left}) {node.op} __as_int({right}))"
+            return f"({left} {node.op} {right})"
         
         if isinstance(node, NewExpr):
             args = ", ".join(self._translate_expression(a) for a in node.arguments)
@@ -99,6 +118,10 @@ class C_GeradorCpp(IGeradorCpp):
 
         return "0"
 
+    @staticmethod
+    def _decl_type(node: VarDecl) -> str:
+        return "double" if node.promover_double else "auto"
+
     def _has_value_return(self, node: Optional[ASTNode]) -> bool:
         if node is None: return False
         if isinstance(node, ReturnStmt): return node.value is not None
@@ -142,7 +165,7 @@ class C_GeradorCpp(IGeradorCpp):
         if node is None: return ""
         if isinstance(node, VarDecl):
             expr = self._translate_expression(node.init_value) if node.init_value else "0"
-            return f"{indent}auto {node.name} = {expr};\n"
+            return f"{indent}{self._decl_type(node)} {node.name} = {expr};\n"
         if isinstance(node, Assignment):
             return f"{indent}{node.name} = {self._translate_expression(node.value)};\n"
         if isinstance(node, PropertyAssign):
@@ -222,7 +245,7 @@ class C_GeradorCpp(IGeradorCpp):
         if node is None: return ""
         if isinstance(node, VarDecl):
             expr = self._translate_expression(node.init_value) if node.init_value else "0"
-            return f"auto {node.name} = {expr}"
+            return f"{self._decl_type(node)} {node.name} = {expr}"
         if isinstance(node, Assignment):
             return f"{node.name} = {self._translate_expression(node.value)}"
         if isinstance(node, PropertyAssign):
@@ -242,7 +265,8 @@ class C_GeradorCpp(IGeradorCpp):
                 for attr in node.attributes:
                     if attr.init_value:
                         init = self._translate_expression(attr.init_value)
-                        cpp_code += f"    decltype({init}) {attr.name} = {init};\n"
+                        tipo = "double" if attr.promover_double else f"decltype({init})"
+                        cpp_code += f"    {tipo} {attr.name} = {init};\n"
                     else:
                         cpp_code += f"    double {attr.name} = 0;\n"
                 for method in node.methods:
