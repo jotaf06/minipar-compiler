@@ -1,5 +1,4 @@
 from __future__ import annotations
-import os
 from typing import Optional
 from interfaces import IGeradorTAC
 from ast_nodes import (
@@ -243,15 +242,3 @@ class C_GeradorTAC(IGeradorTAC):
         for stmt in program.statements:
             self._stmt(stmt)
         return "\n".join(self.lines) + ("\n" if self.lines else "")
-
-    def generate(self, program: Program, output_name: str) -> str:
-        os.makedirs("output", exist_ok=True)
-        tac_path = os.path.join("output", f"{output_name}.tac")
-        text = self.generate_text(program)
-        with open(tac_path, "w", encoding="utf-8") as f:
-            f.write(text)
-        return tac_path
-
-
-# Nome antigo mantido por compatibilidade
-TACGenerator = C_GeradorTAC

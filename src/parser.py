@@ -416,6 +416,3 @@ class C_Sintatico(ISintatico):
             if stmt: prog.statements.append(stmt)
         return prog
 
-
-# Nome antigo mantido por compatibilidade
-Parser = C_Sintatico

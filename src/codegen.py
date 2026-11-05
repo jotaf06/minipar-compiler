@@ -1,5 +1,4 @@
 from __future__ import annotations
-import sys
 from typing import Optional
 from ast_nodes import (
     ASTNode, Program, VarDecl, Assignment, PrintStmt, SeqBlock, ParBlock, BinaryExpr, 
@@ -10,8 +9,6 @@ from ast_nodes import (
 )
 from cpp_template import _CPP_HEADER
 from interfaces import IGeradorCpp
-from compilador_gcc import C_CompiladorGcc
-from erros import ErroGeracao
 
 
 class C_GeradorCpp(IGeradorCpp):
@@ -274,18 +271,3 @@ class C_GeradorCpp(IGeradorCpp):
                 else: cpp_code += self._translate_statement(node, "    ")
         cpp_code += "\n    return 0;\n}\n"
         return cpp_code
-
-    def generate(self, program: Program, output_name: str) -> bool:
-        """Compatibilidade com o codigo 2026.1: gera o C++ e compila com g++."""
-        print("[CODEGEN] Compilando via g++ com -std=c++20 e -O3...")
-        try:
-            exe_path = C_CompiladorGcc().compilar(self.gerar(program), output_name)
-        except ErroGeracao as erro:
-            print(erro, file=sys.stderr)
-            return False
-        print(f"[SUCESSO] Executavel: {exe_path}")
-        return True
-
-
-# Nome antigo mantido por compatibilidade
-CppCodeGenerator = C_GeradorCpp

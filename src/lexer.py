@@ -227,6 +227,3 @@ class C_Lexico(ILexico):
         tokens.append(Token(TokenType.END_OF_FILE, "", self._line, self._col))
         return tokens
 
-
-# Nome antigo mantido por compatibilidade
-Lexer = C_Lexico
