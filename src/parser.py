@@ -1,7 +1,7 @@
 from __future__ import annotations
-import sys
 from typing import List
 from lexer import Token, TokenType
+from erros import ErroSintatico
 from ast_nodes import (
     ASTNode, Program, VarDecl, Assignment, PrintStmt, SeqBlock, ParBlock, 
     BinaryExpr, UnaryExpr, NumberExpr, StringExpr, BoolExpr, IdentifierExpr, IfStmt, WhileStmt,
@@ -33,8 +33,13 @@ class Parser:
     def _consume(self, token_type: TokenType, err_msg: str) -> Token:
         if self._peek().type == token_type: return self._advance()
         tok = self._peek()
-        print(f"[ERRO SINTATICO] Linha {tok.line}: {err_msg} (Encontrado: {tok.lexeme!r})", file=sys.stderr)
-        sys.exit(1)
+        encontrado = "fim do arquivo" if tok.type == TokenType.END_OF_FILE else repr(tok.lexeme)
+        if token_type == TokenType.SEMICOLON and self._pos > 0:
+            # O ';' ausente pertence ao fim do token anterior (normalmente na linha de cima),
+            # e nao ao proximo token, que e onde o parser percebe a falta.
+            ant = self._tokens[self._pos - 1]
+            raise ErroSintatico(f"{err_msg} (encontrado: {encontrado})", ant.line, ant.col + len(ant.lexeme))
+        raise ErroSintatico(f"{err_msg} (encontrado: {encontrado})", tok.line, tok.col)
 
     def _parse_var_decl(self, declared_type: str = "var", require_semicolon: bool = True) -> ASTNode:
         node = VarDecl(name="")
@@ -54,7 +59,7 @@ class Parser:
         if isinstance(target, IdentifierExpr): return Assignment(name=target.name, value=val, line=target.line)
         if isinstance(target, PropertyAccess): return PropertyAssign(object=target.object, property_name=target.property_name, value=val, line=target.line)
         if isinstance(target, IndexExpr): return IndexAssign(target=target, value=val, line=target.line)
-        sys.exit(print(f"[ERRO] Linha {target.line}: Atribuicao invalida", file=sys.stderr) or 1)
+        raise ErroSintatico("Atribuicao invalida: o lado esquerdo deve ser variavel, atributo ou indice", target.line)
 
     def _parse_print_stmt(self) -> ASTNode:
         node = PrintStmt()
@@ -234,10 +239,10 @@ class Parser:
             elif isinstance(expr, (MethodCall, FuncCallExpr)):
                 self._consume(TokenType.SEMICOLON, "Esperado ';'")
                 return expr
-            sys.exit(print(f"[ERRO] Linha {expr.line}: Instrucao ou expressao isolada invalida", file=sys.stderr) or 1)
+            raise ErroSintatico("Expressao isolada nao e uma instrucao valida (esperado atribuicao ou chamada)", expr.line)
 
         tok = self._peek()
-        sys.exit(print(f"[ERRO SINTATICO] Linha {tok.line}: Instrucao nao reconhecida: {tok.lexeme!r}", file=sys.stderr) or 1)
+        raise ErroSintatico(f"Instrucao nao reconhecida: {tok.lexeme!r}", tok.line, tok.col)
 
     def _parse_expression(self) -> ASTNode:
         return self._parse_or()
@@ -366,7 +371,7 @@ class Parser:
             node = self._parse_expression()
             self._consume(TokenType.RPAREN, "Esperado ')'")
         else:
-            sys.exit(print(f"[ERRO SINTATICO] Linha {tok.line}: Expressao esperada", file=sys.stderr) or 1)
+            raise ErroSintatico(f"Expressao esperada (encontrado: {tok.lexeme!r})", tok.line, tok.col)
 
         while True:
             if self._match(TokenType.DOT):

@@ -2,6 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import List
+from erros import ErroLexico
 
 class TokenType(Enum):
     IDENTIFIER     = auto()
@@ -164,7 +165,9 @@ class Lexer:
                         escape_map = {"n": "\n", "t": "\t", '"': '"', "\\": "\\"}
                         text += escape_map.get(escaped, escaped)
                     else: text += self._advance()
-                if self._peek() == '"': self._advance()
+                if self._peek() != '"':
+                    raise ErroLexico("String nao fechada (faltam as aspas finais)", start_line, start_col)
+                self._advance()
                 tokens.append(self._make_token(TokenType.STRING_LITERAL, text, start_line, start_col))
             else:
                 op = self._advance()
@@ -183,12 +186,14 @@ class Lexer:
                     if self._peek() == "&":
                         self._advance()
                         tokens.append(self._make_token(TokenType.AND, "&&", start_line, start_col))
-                    else: tokens.append(self._make_token(TokenType.UNKNOWN, op, start_line, start_col))
+                    else:
+                        raise ErroLexico("Caractere invalido: '&' (use '&&' para E logico)", start_line, start_col)
                 elif op == "|":
                     if self._peek() == "|":
                         self._advance()
                         tokens.append(self._make_token(TokenType.OR, "||", start_line, start_col))
-                    else: tokens.append(self._make_token(TokenType.UNKNOWN, op, start_line, start_col))
+                    else:
+                        raise ErroLexico("Caractere invalido: '|' (use '||' para OU logico)", start_line, start_col)
                 elif op == "<":
                     if self._peek() == "=":
                         self._advance()
@@ -201,7 +206,8 @@ class Lexer:
                     else: tokens.append(self._make_token(TokenType.GT, ">", start_line, start_col))
                 elif op in single_map:
                     tokens.append(self._make_token(single_map[op], op, start_line, start_col))
-                else: tokens.append(self._make_token(TokenType.UNKNOWN, op, start_line, start_col))
+                else:
+                    raise ErroLexico(f"Caractere invalido: {op!r}", start_line, start_col)
 
         tokens.append(Token(TokenType.END_OF_FILE, "", self._line, self._col))
         return tokens
