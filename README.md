@@ -18,13 +18,18 @@ Luiz Miguel de Melo Bomfim - [luizwhirl](https://github.com/luizwhirl)
 ```text
 minipar_python/
 ├── src/
-│   ├── ast_nodes.py      # Nós da AST (dataclasses)
-│   ├── lexer.py          # Analisador Léxico
-│   ├── parser.py         # Analisador Sintático
-│   ├── semantic.py       # Analisador Semântico
-│   ├── tac.py            # Gerador de Código Intermediário (TAC)
-│   ├── codegen.py        # Gerador de Código C++
-│   └── cpp_template.py   # Template base em C++
+│   ├── interfaces.py      # Interfaces dos componentes (classes abstratas I*)
+│   ├── erros.py           # Erros por fase (léxico, sintático, semântico, geração)
+│   ├── controle.py        # C_Controle: coordena as fases + ResultadoCompilacao
+│   ├── lexer.py           # C_Lexico: Analisador Léxico
+│   ├── parser.py          # C_Sintatico: Analisador Sintático
+│   ├── ast_nodes.py       # Nós da AST (dataclasses)
+│   ├── semantic.py        # C_Semantico: Analisador Semântico
+│   ├── tabela_simbolos.py # C_TabelaSimbolos: Tabela de Símbolos (pilha de escopos)
+│   ├── tac.py             # C_GeradorTAC: Gerador de Código Intermediário (TAC)
+│   ├── codegen.py         # C_GeradorCpp: Gerador de Código C++
+│   ├── compilador_gcc.py  # C_CompiladorGcc: compila o C++ gerado com g++ -O3
+│   └── cpp_template.py    # Template base em C++ (threads, sockets, listas)
 ├── static/               # Arquivos estáticos da IDE Web (CSS, JS)
 ├── templates/            # Arquivos HTML da IDE Web
 ├── tests/                # Exemplos e testes .minipar
@@ -100,12 +105,27 @@ Os arquivos gerados (`.cpp`, `.tac` e executáveis) serão armazenados na pasta 
 
 ## Fases do Compilador
 
-| Fase | Arquivos | Descrição |
-|------|----------|------------|
-| 1 | `lexer.py` / `parser.py` | Tokenização do código-fonte e construção da AST |
-| 2 | `semantic.py` | Verificação de declarações, redeclarações e escopo |
-| 3 | `tac.py` | Geração de Código Intermediário (TAC) |
-| 4 | `codegen.py` | Geração de código C++ e compilação automática via `g++ -O3` |
+| Fase | Interface | Componente | Entrada → Saída |
+|------|-----------|------------|-----------------|
+| 1 | `ILexico` | `C_Lexico` | código-fonte → tokens |
+| 2 | `ISintatico` | `C_Sintatico` | tokens → AST |
+| 3 | `ISemantico` | `C_Semantico` (usa `ITabelaSimbolos` / `C_TabelaSimbolos`) | AST → AST validada + tabela de símbolos |
+| 4 | `IGeradorTAC` | `C_GeradorTAC` | AST → código de três endereços |
+| 5 | `IGeradorCpp` | `C_GeradorCpp` | AST → código C++ |
+| 6 | `ICompiladorCpp` | `C_CompiladorGcc` | código C++ → executável (`g++ -O3`) |
+
+### Arquitetura em Componentes de Software
+
+Cada componente é uma classe `C_*` que herda de uma interface `I*` (classe abstrata) e contém o algoritmo da sua fase. O componente `C_Controle` (interface `IControle`) executa as fases na ordem acima conversando com os demais **somente pelas interfaces**:
+
+```python
+icontrole: IControle = C_Controle()
+resultado = icontrole.compilar(codigo_fonte, "programa")
+```
+
+O `ResultadoCompilacao` devolvido guarda o produto de cada fase (tokens, AST, tabela de símbolos, TAC, C++, executável) e os erros com fase, linha e coluna. Se uma fase falhar, as seguintes não executam, mas o que já foi produzido continua disponível.
+
+Erros léxicos e sintáticos interrompem a compilação no primeiro erro; o analisador semântico reporta todos os erros encontrados de uma vez.
 
 ---
 

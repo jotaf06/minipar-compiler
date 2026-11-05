@@ -59,7 +59,6 @@ class TokenType(Enum):
     SEMICOLON = auto()
     COMMA     = auto()
     END_OF_FILE = auto()
-    UNKNOWN     = auto()
 
 KEYWORDS: dict[str, TokenType] = {
     "class":     TokenType.CLASS,
@@ -100,8 +99,10 @@ KEYWORDS: dict[str, TokenType] = {
 class Token:
     type: TokenType
     lexeme: str
-    line: int
+    line: int          # posicao do primeiro caractere
     col: int
+    end_line: int = 0  # posicao logo apos o ultimo caractere (inclui aspas e escapes de strings)
+    end_col: int = 0
 
 class C_Lexico(ILexico):
     """Componente Analisador Lexico - implementa ILexico.
@@ -146,7 +147,8 @@ class C_Lexico(ILexico):
             else: break
 
     def _make_token(self, token_type: TokenType, lexeme: str, line: int, col: int) -> Token:
-        return Token(token_type, lexeme, line, col)
+        # Chamado logo apos consumir o token: (self._line, self._col) e onde ele termina
+        return Token(token_type, lexeme, line, col, self._line, self._col)
 
     def tokenize(self) -> List[Token]:
         tokens: List[Token] = []
@@ -226,4 +228,3 @@ class C_Lexico(ILexico):
 
         tokens.append(Token(TokenType.END_OF_FILE, "", self._line, self._col))
         return tokens
-

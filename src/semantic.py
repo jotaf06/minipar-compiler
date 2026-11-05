@@ -48,7 +48,11 @@ class C_Semantico(ISemantico):
     def _exit_scope(self) -> None: self._tabela.sair_escopo()
 
     def _get_context(self) -> str:
-        return f" (Funcao: {self._current_function})" if self._current_function else ""
+        if not self._current_function:
+            return ""
+        if self._current_class:
+            return f" (Metodo: {self._current_class}.{self._current_function})"
+        return f" (Funcao: {self._current_function})"
 
     def _define_symbol(self, name: str, type_: str, line: int, params: Optional[List[str]] = None) -> None:
         if not self._tabela.definir(name, type_, line, params):
@@ -210,7 +214,10 @@ class C_Semantico(ISemantico):
             self._exit_scope()
         elif isinstance(node, FuncDecl):
             self._define_symbol(node.name, "FUNC", node.line, node.params)
-            self._enter_scope(f"funcao {node.name}")
+            if self._current_class:
+                self._enter_scope(f"metodo {self._current_class}.{node.name}")
+            else:
+                self._enter_scope(f"funcao {node.name}")
             old_function = self._current_function
             self._current_function = node.name
             for p in node.params: self._define_symbol(p, "var", node.line)
@@ -260,4 +267,3 @@ class C_Semantico(ISemantico):
         self._collect_declarations(program)
         for stmt in program.statements: self.validate_node(stmt)
         return not self.erros
-
