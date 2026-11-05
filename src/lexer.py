@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from typing import List
 from erros import ErroLexico
+from interfaces import ILexico
 
 class TokenType(Enum):
     IDENTIFIER     = auto()
@@ -102,12 +103,26 @@ class Token:
     line: int
     col: int
 
-class Lexer:
-    def __init__(self, source_code: str) -> None:
+class C_Lexico(ILexico):
+    """Componente Analisador Lexico - implementa ILexico.
+
+    Percorre o codigo caractere por caractere, ignorando espacos e
+    comentarios (#), e agrupa os caracteres em tokens com linha e coluna.
+    """
+
+    def __init__(self, source_code: str = "") -> None:
+        self._reset(source_code)
+
+    def _reset(self, source_code: str) -> None:
         self._source = source_code
         self._pos = 0
         self._line = 1
         self._col = 1
+
+    # ---- Interface ILexico ----
+    def analisar(self, codigo_fonte: str) -> List[Token]:
+        self._reset(codigo_fonte)
+        return self.tokenize()
 
     def _peek(self) -> str:
         if self._pos >= len(self._source): return "\0"
@@ -211,3 +226,7 @@ class Lexer:
 
         tokens.append(Token(TokenType.END_OF_FILE, "", self._line, self._col))
         return tokens
+
+
+# Nome antigo mantido por compatibilidade
+Lexer = C_Lexico
