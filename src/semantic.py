@@ -61,7 +61,12 @@ class C_Semantico(ISemantico):
 
     def _define_symbol(self, name: str, type_: str, line: int, params: Optional[List[str]] = None) -> None:
         if not self._tabela.definir(name, type_, line, params):
-            self._report(line, f"Variavel '{name}' ja declarada.")
+            existente = self._lookup(name)
+            if existente is not None and existente.tipo == "var" and existente.escopo.startswith(("funcao", "metodo")) \
+                    and existente.declaracao is None:
+                self._report(line, f"'{name}' ja e um parametro da funcao e nao pode ser redeclarado.")
+            else:
+                self._report(line, f"Variavel '{name}' ja declarada.")
 
     def _lookup(self, name: str) -> Optional[Simbolo]:
         return self._tabela.buscar(name)
@@ -139,10 +144,16 @@ class C_Semantico(ISemantico):
             if sym is not None and sym.declaracao is None:
                 sym.declaracao = node
                 sym.tipo_numerico = "float" if node.promover_double else self._numeric_kind(node.init_value)
+            if self._tabela.nivel() == 0:
+                # Variavel global: o gerador C++ precisa do tipo para declara-la antes das funcoes
+                node.escopo_global = True
+                node.tipo_cpp = self._tipo_cpp(node.init_value)
         elif isinstance(node, Assignment):
             sym = self._lookup(node.name)
             if sym is None:
                 self._report(node.line, f"Variavel '{node.name}' nao declarada.")
+            else:
+                self._verificar_global_em_funcao(sym, node.line)
             self.validate_node(node.value)
             if sym is not None:
                 self._promover(sym.declaracao, node.value)
@@ -175,8 +186,11 @@ class C_Semantico(ISemantico):
             if isinstance(node.target, IndexExpr):
                 self._registrar_elemento(node.target.object, node.value)
         elif isinstance(node, IdentifierExpr):
-            if self._lookup(node.name) is None:
+            sym = self._lookup(node.name)
+            if sym is None:
                 self._report(node.line, f"Variavel '{node.name}' nao declarada.")
+            else:
+                self._verificar_global_em_funcao(sym, node.line)
         elif isinstance(node, BinaryExpr):
             self.validate_node(node.left)
             self.validate_node(node.right)
@@ -245,7 +259,12 @@ class C_Semantico(ISemantico):
                 sym = self._lookup(p)
                 if sym is not None and i in reais:
                     sym.tipo_numerico = "float"
-            self.validate_node(node.body)
+            # O corpo { } compartilha o escopo dos parametros (como no C++ e no Python):
+            # assim "func f(a) { var a = 1; }" e detectado como redeclaracao.
+            if isinstance(node.body, SeqBlock):
+                for stmt in node.body.statements: self.validate_node(stmt)
+            else:
+                self.validate_node(node.body)
             self._current_function = old_function
             self._exit_scope()
         elif isinstance(node, ReturnStmt):
@@ -411,6 +430,15 @@ class C_Semantico(ISemantico):
     def _attr_decl(self, obj: ASTNode, attr: str) -> Optional[VarDecl]:
         cls_name = self._infer_type(obj)
         return self._class_attr_decls.get(cls_name, {}).get(attr)
+
+    def _verificar_global_em_funcao(self, sym: Simbolo, linha: int) -> None:
+        """Funcoes so enxergam globais cujo tipo o compilador consegue determinar."""
+        decl = sym.declaracao
+        if (self._current_function and isinstance(decl, VarDecl) and decl.escopo_global
+                and not decl.promover_double and decl.tipo_cpp is None):
+            self._report(linha, f"Variavel global '{sym.nome}' usada em funcao, mas seu tipo nao "
+                                f"pode ser determinado. Inicialize-a com um valor literal "
+                                f"(ex.: 0, 0.0, \"\", [] ou new Classe()).")
 
     def _registrar_args_reais(self, classe: Optional[str], funcao: str, argumentos: List[ASTNode]) -> None:
         """Se uma chamada passa um valor real, o parametro correspondente e real."""

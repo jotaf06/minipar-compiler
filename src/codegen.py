@@ -146,6 +146,12 @@ class C_GeradorCpp(IGeradorCpp):
         return self._translate_expression(target)
 
     @staticmethod
+    def _global_tipada(node: ASTNode) -> bool:
+        """Variavel do topo do programa com tipo conhecido: vira global no C++."""
+        return (isinstance(node, VarDecl) and node.escopo_global
+                and (node.promover_double or node.tipo_cpp is not None))
+
+    @staticmethod
     def _decl_type(node: VarDecl) -> str:
         return "double" if node.promover_double else "auto"
 
@@ -282,7 +288,21 @@ class C_GeradorCpp(IGeradorCpp):
     def gerar(self, programa: Program) -> str:
         program = programa
         cpp_code = _CPP_HEADER
-        
+
+        # Declaracao antecipada das classes: globais e funcoes podem referencia-las
+        for node in program.statements:
+            if isinstance(node, ClassDecl):
+                cpp_code += f"class {node.name};\n"
+
+        # Variaveis globais (var no topo do programa): declaradas aqui, antes das classes
+        # e funcoes que as usam, e inicializadas no main() na ordem original do programa
+        # (globais de tipo desconhecido continuam locais do main(); o semantico impede
+        #  que funcoes as usem)
+        for node in program.statements:
+            if self._global_tipada(node):
+                cpp_code += f"{'double' if node.promover_double else node.tipo_cpp} {node.name};\n"
+        cpp_code += "\n"
+
         for node in program.statements:
             if isinstance(node, ClassDecl):
                 cpp_code += f"class {node.name}" + (f" : public {node.superclass}" if node.superclass else "") + " {\npublic:\n"
@@ -313,6 +333,10 @@ class C_GeradorCpp(IGeradorCpp):
 
         cpp_code += "int main() {\n    #ifdef _WIN32\n        WSADATA wsa;\n        WSAStartup(MAKEWORD(2,2), &wsa);\n    #endif\n\n"
         for node in program.statements:
+            if self._global_tipada(node):
+                expr = self._translate_expression(node.init_value) if node.init_value else "{}"
+                cpp_code += f"    {node.name} = {expr};\n"
+                continue
             if not isinstance(node, (ClassDecl, FuncDecl)):
                 if isinstance(node, SeqBlock):
                     for stmt in node.statements: cpp_code += self._translate_statement(stmt, "    ")

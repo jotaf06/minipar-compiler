@@ -1,0 +1,21 @@
+# Variaveis globais (declaradas no topo do programa) usadas dentro de funcoes
+
+var NUM_ALUNOS = 40;
+var ATIVIDADES_POR_ALUNO = 4;
+var AVALIADORES = ["Professor", "Monitor 1", "Monitor 2", "Monitor 3"];
+var estado_random = 123456789;
+
+# Gerador pseudoaleatorio LCG com estado global (como o meu_random_uniforme do teste 8)
+func meu_random_uniforme(minimo, maximo) {
+    estado_random = (estado_random * 1103515245 + 12345) & 0x7FFFFFFF;
+    var fracao = estado_random / 2147483647.0;
+    return minimo + (maximo - minimo) * fracao;
+}
+
+func total_atividades() {
+    return NUM_ALUNOS * ATIVIDADES_POR_ALUNO;
+}
+
+print("Total:", total_atividades(), "| avaliadores:", len(AVALIADORES));
+var sorteio = meu_random_uniforme(0.05, 0.15);
+print("sorteio:", format(sorteio, 6), "| estado:", estado_random);

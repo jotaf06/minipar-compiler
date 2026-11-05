@@ -48,6 +48,10 @@ class VarDecl(ASTNode):
     # em alguma atribuicao (ex.: soma = 0; soma = soma + 0.5). O gerador C++ a declara
     # como double desde o inicio, como o Python faria.
     promover_double: bool = False
+    # Preenchidos pelo semantico para variaveis declaradas no topo do programa
+    # (fora de blocos): viram variaveis globais no C++, visiveis nas funcoes.
+    escopo_global: bool = False
+    tipo_cpp: Optional[str] = None
 
 @dataclass
 class Assignment(ASTNode):
