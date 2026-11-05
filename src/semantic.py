@@ -1,5 +1,4 @@
 from __future__ import annotations
-import sys
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 from ast_nodes import (
@@ -9,6 +8,7 @@ from ast_nodes import (
     ClassDecl, FuncDecl, ReturnStmt, MethodCall, FuncCallExpr, PropertyAccess, PropertyAssign, NewExpr, ThisExpr,
     CChannelExpr, SendStmt, ReceiveExpr, ListLiteral, MatrixCreateExpr, IndexExpr, IndexAssign
 )
+from erros import ErroSemantico
 
 @dataclass
 class Symbol:
@@ -21,7 +21,8 @@ class Symbol:
 class SemanticAnalyzer:
     def __init__(self) -> None:
         self._scopes: List[Dict[str, Symbol]] = []
-        self._has_errors = False
+        # Erros acumulados: a analise continua apos um erro para reportar todos de uma vez
+        self.erros: List[ErroSemantico] = []
         self._current_function: Optional[str] = None
         self._current_class: Optional[str] = None
         self._classes: Dict[str, Symbol] = {}
@@ -38,8 +39,7 @@ class SemanticAnalyzer:
 
     def _define_symbol(self, name: str, type_: str, line: int, params: Optional[List[str]] = None) -> None:
         if name in self._scopes[-1]:
-            print(f"[ERRO SEMANTICO] Linha {line}{self._get_context()}: Variavel '{name}' ja declarada.", file=sys.stderr)
-            self._has_errors = True
+            self._report(line, f"Variavel '{name}' ja declarada.")
         else: self._scopes[-1][name] = Symbol(name=name, type=type_, params=params or [])
 
     def _lookup(self, name: str) -> Optional[Symbol]:
@@ -48,8 +48,7 @@ class SemanticAnalyzer:
         return None
 
     def _report(self, line: int, message: str) -> None:
-        print(f"[ERRO SEMANTICO] Linha {line}{self._get_context()}: {message}", file=sys.stderr)
-        self._has_errors = True
+        self.erros.append(ErroSemantico(f"{message}{self._get_context()}", line))
 
     def _infer_type(self, node: Optional[ASTNode]) -> str:
         if node is None: return "unknown"
@@ -250,4 +249,4 @@ class SemanticAnalyzer:
     def analyze(self, program: Program) -> bool:
         self._collect_declarations(program)
         for stmt in program.statements: self.validate_node(stmt)
-        return not self._has_errors
+        return not self.erros

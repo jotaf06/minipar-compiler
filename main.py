@@ -9,6 +9,7 @@ from parser import Parser
 from semantic import SemanticAnalyzer
 from tac import TACGenerator
 from codegen import CppCodeGenerator
+from erros import ErroLexico, ErroSintatico
 
 def compile_file(source_path: str, output_name: str) -> bool:
     """Processa as 3 Fases do Compilador em um arquivo alvo."""
@@ -20,17 +21,26 @@ def compile_file(source_path: str, output_name: str) -> bool:
         print(f"[ERRO] Arquivo nao encontrado: {source_path}", file=sys.stderr)
         return False
 
-    print("[Fase 1] Analise Lexica e Sintatica...")
-    lexer  = Lexer(source_code)
-    tokens = lexer.tokenize()
+    try:
+        print("[Fase 1] Analise Lexica e Sintatica...")
+        lexer  = Lexer(source_code)
+        tokens = lexer.tokenize()
 
-    parser  = Parser(tokens)
-    program = parser.parse()
+        parser  = Parser(tokens)
+        program = parser.parse()
+    except (ErroLexico, ErroSintatico) as erro:
+        # Lexico/sintatico: param no primeiro erro (nao ha AST confiavel para continuar)
+        print(erro, file=sys.stderr)
+        print("[ERRO] Compilacao abortada.", file=sys.stderr)
+        return False
 
     print("[Fase 2] Analise Semantica e Tabela de Simbolos...")
     semantic = SemanticAnalyzer()
     if not semantic.analyze(program):
-        print("[ERRO] Falha na Analise Semantica. Compilacao abortada.", file=sys.stderr)
+        # Semantico: todos os erros encontrados sao exibidos de uma vez
+        for erro in semantic.erros:
+            print(erro, file=sys.stderr)
+        print(f"[ERRO] Falha na Analise Semantica ({len(semantic.erros)} erro(s)). Compilacao abortada.", file=sys.stderr)
         return False
 
     print("[Fase 3] Geracao de Codigo Intermediario (TAC - 3 enderecos)...")
