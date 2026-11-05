@@ -47,7 +47,8 @@ class C_GeradorCpp(IGeradorCpp):
     def _translate_expression(self, node: Optional[ASTNode]) -> str:
         if node is None: return "0"
         if isinstance(node, NumberExpr): return self._translate_number(node.value)
-        if isinstance(node, StringExpr): return f'"{self._escape_string(node.value)}"'
+        # std::string (e nao const char*): permite concatenar, comparar e indexar
+        if isinstance(node, StringExpr): return f'std::string("{self._escape_string(node.value)}")'
         if isinstance(node, BoolExpr): return "true" if node.value else "false"
         if isinstance(node, IdentifierExpr): return node.name
         if isinstance(node, UnaryExpr): return f"({node.op}{self._translate_expression(node.operand)})"
@@ -58,6 +59,8 @@ class C_GeradorCpp(IGeradorCpp):
                 return f"{self.OPERADORES_FUNCAO[node.op]}({left}, {right})"
             if node.op in self.OPERADORES_BIT:
                 return f"(__as_int({left}) {node.op} __as_int({right}))"
+            if node.op == "+":
+                return f"__add({left}, {right})"   # numeros, strings (com conversao) ou listas
             return f"({left} {node.op} {right})"
         
         if isinstance(node, NewExpr):
@@ -65,7 +68,7 @@ class C_GeradorCpp(IGeradorCpp):
             return f"std::make_shared<{node.class_name}>({args})"
         if isinstance(node, ThisExpr): return "this"
         if isinstance(node, PropertyAccess):
-            if node.property_name == "size": return f"{self._translate_expression(node.object)}.size()"
+            if node.property_name == "size": return f"__len({self._translate_expression(node.object)})"
             return f"{self._translate_expression(node.object)}->{node.property_name}"
         
         if isinstance(node, MethodCall):
@@ -73,7 +76,7 @@ class C_GeradorCpp(IGeradorCpp):
             m_name = node.method_name
             if m_name in ("append", "push_back"): return f"{self._translate_expression(node.object)}.push_back({args})"
             if m_name == "pop": return f"__array_pop({self._translate_expression(node.object)})"
-            if m_name == "size": return f"{self._translate_expression(node.object)}.size()"
+            if m_name == "size": return f"__len({self._translate_expression(node.object)})"
             return f"{self._translate_expression(node.object)}->{m_name}({args})"
         
         if isinstance(node, FuncCallExpr):
@@ -83,13 +86,17 @@ class C_GeradorCpp(IGeradorCpp):
             if node.name == "random":
                 return "random_val()"
             if node.name == "len":
-                return f"{self._translate_expression(node.arguments[0])}.size()"
+                return f"__len({self._translate_expression(node.arguments[0])})"
             if node.name == "range":
                 return f"__minipar_range({args})"
             if node.name == "to_number":
                 return f"std::stod({args})"
             if node.name == "parse_ints":
                 return f"__parse_ints({args})"
+            if node.name == "slice":
+                return f"__slice({args})"
+            if node.name == "join_str":
+                return f"__join_str({args})"
             return f"{node.name}({args})"
 
         if isinstance(node, CChannelExpr):
@@ -105,7 +112,11 @@ class C_GeradorCpp(IGeradorCpp):
 
         if isinstance(node, ListLiteral):
             elems = ", ".join(self._translate_expression(e) for e in node.elements)
-            return f"std::vector<double>{{{elems}}}"
+            if node.tipo_elemento:                       # tipo decidido pelo semantico
+                return f"__lista_t<{node.tipo_elemento}>({elems})"
+            if not node.elements:                        # lista vazia sem uso conhecido
+                return "std::vector<double>{}"
+            return f"__lista({elems})"                   # C++ deduz o tipo comum
         if isinstance(node, MatrixCreateExpr):
             r = self._translate_expression(node.rows)
             c = self._translate_expression(node.cols)
@@ -114,9 +125,17 @@ class C_GeradorCpp(IGeradorCpp):
         if isinstance(node, IndexExpr):
             obj = self._translate_expression(node.object)
             idx = self._translate_expression(node.index)
-            return f"{obj}[{idx}]"
+            return f"__index({obj}, {idx})"   # leitura com verificacao de limites
 
         return "0"
+
+    def _translate_index_target(self, target: ASTNode) -> str:
+        """Destino de lista[i] = v: escrita alem do fim aumenta a lista (pilha que cresce)."""
+        if isinstance(target, IndexExpr):
+            obj = self._translate_expression(target.object)
+            idx = self._translate_expression(target.index)
+            return f"__index_set({obj}, {idx})"
+        return self._translate_expression(target)
 
     @staticmethod
     def _decl_type(node: VarDecl) -> str:
@@ -172,7 +191,7 @@ class C_GeradorCpp(IGeradorCpp):
             obj = self._translate_expression(node.object)
             return f"{indent}{obj}->{node.property_name} = {self._translate_expression(node.value)};\n"
         if isinstance(node, IndexAssign):
-            tgt = self._translate_expression(node.target)
+            tgt = self._translate_index_target(node.target)
             return f"{indent}{tgt} = {self._translate_expression(node.value)};\n"
         
         if isinstance(node, (MethodCall, FuncCallExpr)):
@@ -251,7 +270,7 @@ class C_GeradorCpp(IGeradorCpp):
         if isinstance(node, PropertyAssign):
             return f"{self._translate_expression(node.object)}->{node.property_name} = {self._translate_expression(node.value)}"
         if isinstance(node, IndexAssign):
-            return f"{self._translate_expression(node.target)} = {self._translate_expression(node.value)}"
+            return f"{self._translate_index_target(node.target)} = {self._translate_expression(node.value)}"
         return self._translate_expression(node)
 
     # ---- Interface IGeradorCpp ----

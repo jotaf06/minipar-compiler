@@ -11,6 +11,7 @@ _CPP_HEADER = """\
 #include <cstdlib>
 #include <type_traits>
 #include <mutex>
+#include <algorithm>
 
 #ifdef _WIN32
   #include <winsock2.h>
@@ -40,10 +41,10 @@ std::string input(const std::string& prompt) {
 }
 
 // Converte linha com inteiros separados por espaco em vetor (ex.: "10 -3 80")
-std::vector<double> __parse_ints(const std::string& s) {
-    std::vector<double> result;
+std::vector<long long> __parse_ints(const std::string& s) {
+    std::vector<long long> result;
     std::istringstream iss(s);
-    double n;
+    long long n;
     while (iss >> n) {
         result.push_back(n);
     }
@@ -134,13 +135,128 @@ std::ostream& operator<<(std::ostream& os, const std::vector<T>& v) {
     return os;
 }
 
+// ---------------------------------------------------------------------------
+// Strings e listas
+// ---------------------------------------------------------------------------
+template<typename T> struct __is_vector : std::false_type {};
+template<typename T, typename A> struct __is_vector<std::vector<T, A>> : std::true_type {};
+
+template<typename T>
+constexpr bool __is_texto_v = std::is_same_v<std::decay_t<T>, std::string>
+                           || std::is_same_v<std::decay_t<T>, const char*>
+                           || std::is_same_v<std::decay_t<T>, char*>
+                           || std::is_same_v<std::decay_t<T>, char>;
+
+// Converte qualquer valor para texto (usado por +, send e join_str)
 template<typename T>
 std::string __to_string(const T& val) {
-    if constexpr (std::is_constructible_v<std::string, T>) {
+    if constexpr (std::is_same_v<std::decay_t<T>, char>) {
+        return std::string(1, val);
+    } else if constexpr (std::is_constructible_v<std::string, T>) {
         return std::string(val);
+    } else if constexpr (__is_vector<std::decay_t<T>>::value) {
+        std::ostringstream os;
+        os << val;
+        return os.str();
     } else {
         return std::to_string(val);
     }
+}
+
+// a + b: soma numerica, concatenacao de texto (convertendo o outro lado) ou de listas
+template<typename A, typename B>
+inline auto __add(const A& a, const B& b) {
+    if constexpr (__is_texto_v<A> || __is_texto_v<B>) {
+        return __to_string(a) + __to_string(b);
+    } else if constexpr (__is_vector<A>::value && __is_vector<B>::value) {
+        A r = a;
+        r.insert(r.end(), b.begin(), b.end());
+        return r;
+    } else {
+        return a + b;
+    }
+}
+
+// Literais de lista: tipo definido pelo semantico (__lista_t) ou deduzido (__lista)
+template<typename T, typename... Args>
+std::vector<T> __lista_t(const Args&... args) {
+    std::vector<T> v;
+    v.reserve(sizeof...(Args));
+    (v.push_back(static_cast<T>(args)), ...);
+    return v;
+}
+
+template<typename... Args>
+auto __lista(const Args&... args) {
+    using T = std::common_type_t<std::decay_t<Args>...>;
+    return __lista_t<T>(args...);
+}
+
+template<typename T>
+inline long long __len(const T& x) { return static_cast<long long>(x.size()); }
+
+[[noreturn]] inline void __erro_indice(long long i, std::size_t n) {
+    __erro_execucao("Indice " + std::to_string(i) + " fora dos limites (tamanho "
+                    + std::to_string(n) + ")");
+}
+
+// Leitura lista[i] / texto[i]: indices negativos contam do fim, como no Python
+template<typename T, typename I>
+inline T& __index(std::vector<T>& v, I idx) {
+    long long i = static_cast<long long>(idx);
+    if (i < 0) i += static_cast<long long>(v.size());
+    if (i < 0 || i >= static_cast<long long>(v.size())) __erro_indice(static_cast<long long>(idx), v.size());
+    return v[i];
+}
+
+template<typename T, typename I>
+inline const T& __index(const std::vector<T>& v, I idx) {
+    long long i = static_cast<long long>(idx);
+    if (i < 0) i += static_cast<long long>(v.size());
+    if (i < 0 || i >= static_cast<long long>(v.size())) __erro_indice(static_cast<long long>(idx), v.size());
+    return v[i];
+}
+
+template<typename I>
+inline std::string __index(const std::string& s, I idx) {
+    long long i = static_cast<long long>(idx);
+    if (i < 0) i += static_cast<long long>(s.size());
+    if (i < 0 || i >= static_cast<long long>(s.size())) __erro_indice(static_cast<long long>(idx), s.size());
+    return std::string(1, s[i]);
+}
+
+// Escrita lista[i] = v: alem do fim, a lista cresce (comportamento de pilha)
+template<typename T, typename I>
+inline T& __index_set(std::vector<T>& v, I idx) {
+    long long i = static_cast<long long>(idx);
+    if (i < 0) i += static_cast<long long>(v.size());
+    if (i < 0) __erro_indice(static_cast<long long>(idx), v.size());
+    if (i >= static_cast<long long>(v.size())) v.resize(i + 1);
+    return v[i];
+}
+
+// slice(x, a, b): fatia x[a:b] de lista ou texto (indices como no Python)
+template<typename T, typename A, typename B>
+T __slice(const T& x, A a, B b) {
+    long long n = static_cast<long long>(x.size());
+    long long ini = static_cast<long long>(a), fim = static_cast<long long>(b);
+    if (ini < 0) ini += n;
+    if (fim < 0) fim += n;
+    ini = std::max(0LL, std::min(ini, n));
+    fim = std::max(0LL, std::min(fim, n));
+    if (fim <= ini) return T{};
+    return T(x.begin() + ini, x.begin() + fim);
+}
+
+// join_str(lista, sep): junta os elementos como texto (equivale a sep.join(lista) do Python)
+template<typename T>
+std::string __join_str(const std::vector<T>& lista, const std::string& sep) {
+    std::string r;
+    for (std::size_t i = 0; i < lista.size(); ++i) {
+        if (i > 0) r += sep;
+        r += __to_string(lista[i]);
+    }
+    return r;
 }
 
 template<typename T>

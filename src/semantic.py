@@ -100,10 +100,13 @@ class C_Semantico(ISemantico):
         if isinstance(node, MethodCall):
             return "unknown"
         if isinstance(node, FuncCallExpr):
-            if node.name in ("random", "exp"): return "number"
+            if node.name in ("random", "exp", "len"): return "number"
             if node.name in ("range", "parse_ints"): return "list"
+            if node.name == "join_str": return "string"
+            if node.name == "slice" and node.arguments: return self._infer_type(node.arguments[0])
             return "unknown"
-        if isinstance(node, IndexExpr): return "unknown"
+        if isinstance(node, IndexExpr):
+            return "string" if self._infer_type(node.object) == "string" else "unknown"
         return "unknown"
 
     def _types_compatible(self, declared: str, actual: str) -> bool:
@@ -157,6 +160,8 @@ class C_Semantico(ISemantico):
             self.validate_node(node.channel)
         elif isinstance(node, ListLiteral):
             for e in node.elements: self.validate_node(e)
+            if node.tipo_elemento is None and node.elements:
+                node.tipo_elemento = self._tipo_elementos(node.elements)
         elif isinstance(node, MatrixCreateExpr):
             self.validate_node(node.rows)
             self.validate_node(node.cols)
@@ -167,6 +172,8 @@ class C_Semantico(ISemantico):
         elif isinstance(node, IndexAssign):
             self.validate_node(node.target)
             self.validate_node(node.value)
+            if isinstance(node.target, IndexExpr):
+                self._registrar_elemento(node.target.object, node.value)
         elif isinstance(node, IdentifierExpr):
             if self._lookup(node.name) is None:
                 self._report(node.line, f"Variavel '{node.name}' nao declarada.")
@@ -254,8 +261,10 @@ class C_Semantico(ISemantico):
             for arg in node.arguments: self.validate_node(arg)
             if cls:
                 self._registrar_args_reais(obj_type, node.method_name, node.arguments)
+            if node.method_name in ("append", "push_back") and len(node.arguments) == 1:
+                self._registrar_elemento(node.object, node.arguments[0])
         elif isinstance(node, FuncCallExpr):
-            if node.name not in self._functions and node.name not in ("exp", "random", "range", "len", "to_number", "parse_ints"):
+            if node.name not in self._functions and node.name not in self.FUNCOES_NATIVAS:
                 self._report(node.line, f"Funcao '{node.name}' nao declarada.")
             elif node.name in self._functions and len(self._functions[node.name].parametros) != len(node.arguments):
                 self._report(node.line, f"Funcao '{node.name}' espera {len(self._functions[node.name].parametros)} argumento(s), recebeu {len(node.arguments)}.")
@@ -310,6 +319,57 @@ class C_Semantico(ISemantico):
         self._loop_depth = 0
         self._promocoes = 0
 
+    FUNCOES_NATIVAS = ("exp", "random", "range", "len", "to_number", "parse_ints", "slice", "join_str")
+
+    # ---- Tipos das listas (elemento C++) ----
+    def _lista_declarada(self, obj: ASTNode) -> Optional[ListLiteral]:
+        """Literal de lista que inicializou a variavel/atributo 'obj', se houver."""
+        decl = None
+        if isinstance(obj, IdentifierExpr):
+            sym = self._lookup(obj.name)
+            decl = sym.declaracao if sym else None
+        elif isinstance(obj, PropertyAccess):
+            decl = self._attr_decl(obj.object, obj.property_name)
+        if decl is not None and isinstance(decl.init_value, ListLiteral):
+            return decl.init_value
+        return None
+
+    def _tipo_cpp(self, node: ASTNode) -> Optional[str]:
+        """Tipo C++ de um valor, quando o semantico consegue determinar."""
+        tipo = self._infer_type(node)
+        if tipo == "string": return "std::string"
+        if tipo == "bool": return "bool"
+        kind = self._numeric_kind(node)
+        if kind == "int": return "long long"
+        if kind == "float": return "double"
+        if tipo in self._classes: return f"std::shared_ptr<{tipo}>"
+        if isinstance(node, ListLiteral) and node.tipo_elemento:
+            return f"std::vector<{node.tipo_elemento}>"
+        return None
+
+    def _tipo_elementos(self, elementos: List[ASTNode]) -> Optional[str]:
+        tipos = [self._tipo_cpp(e) for e in elementos]
+        if all(t == "long long" for t in tipos): return "long long"
+        if all(t in ("long long", "double") for t in tipos): return "double"
+        if all(t == tipos[0] for t in tipos): return tipos[0]
+        return None   # o C++ deduz o tipo comum dos elementos
+
+    def _registrar_elemento(self, lista: ASTNode, valor: ASTNode) -> None:
+        """Ajusta o tipo dos elementos de uma lista ao receber 'valor' (indice ou append)."""
+        lit = self._lista_declarada(lista)
+        if lit is None:
+            return
+        if lit.tipo_elemento is None and not lit.elements:
+            tipo = self._tipo_cpp(valor)          # lista vazia: tipo do primeiro elemento
+            if tipo:
+                lit.tipo_elemento = tipo
+                self._promocoes += 1
+        elif lit.tipo_elemento == "long long" and self._numeric_kind(valor) != "int":
+            # Na duvida (valor real ou desconhecido), a lista numerica vira de reais,
+            # como era no MiniPar 2026.1 (toda lista era vector<double>).
+            lit.tipo_elemento = "double"
+            self._promocoes += 1
+
     # ---- Inferencia numerica (int x float), para escolher o tipo C++ ----
     FUNCOES_REAIS = ("exp", "random", "clock", "to_number")
     FUNCOES_INTEIRAS = ("len", "to_int")
@@ -341,6 +401,10 @@ class C_Semantico(ISemantico):
         if isinstance(node, FuncCallExpr):
             if node.name in self.FUNCOES_REAIS: return "float"
             if node.name in self.FUNCOES_INTEIRAS: return "int"
+        if isinstance(node, IndexExpr):
+            lit = self._lista_declarada(node.object)
+            if lit is not None:
+                return {"long long": "int", "double": "float"}.get(lit.tipo_elemento)
         return None
 
     def _attr_decl(self, obj: ASTNode, attr: str) -> Optional[VarDecl]:

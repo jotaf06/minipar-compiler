@@ -189,6 +189,9 @@ class InputExpr(ASTNode):
 class ListLiteral(ASTNode):
     elements: List[ASTNode]
     line: int = 1
+    # Tipo C++ dos elementos, preenchido pelo semantico ("long long", "double",
+    # "std::string", ...). None: o proprio C++ deduz a partir dos elementos.
+    tipo_elemento: Optional[str] = None
 
 @dataclass
 class MatrixCreateExpr(ASTNode):
