@@ -12,6 +12,9 @@ from ast_nodes import (
 )
 from cpp_template import _CPP_HEADER
 
+# Extensao do executavel gerado, conforme a plataforma (Windows: .exe; Linux/macOS: sem extensao)
+EXE_EXT = ".exe" if sys.platform == "win32" else ""
+
 class CppCodeGenerator:
     @staticmethod
     def _escape_string(value: str) -> str:
@@ -264,12 +267,15 @@ class CppCodeGenerator:
 
         os.makedirs("output", exist_ok=True)
         cpp_path = os.path.join("output", f"{output_name}.cpp")
-        exe_path = os.path.join("output", f"{output_name}.exe")
+        exe_path = os.path.join("output", f"{output_name}{EXE_EXT}")
 
         with open(cpp_path, "w", encoding="utf-8") as f: f.write(cpp_code)
-        
+
         print("[CODEGEN] Compilando via g++ com -std=c++20 e -O3...")
-        result = subprocess.run(["g++", "-std=c++20", "-O3", cpp_path, "-o", exe_path, "-pthread", "-lws2_32"])
+        cmd = ["g++", "-std=c++20", "-O3", cpp_path, "-o", exe_path, "-pthread"]
+        if sys.platform == "win32":
+            cmd.append("-lws2_32")  # Winsock: necessario apenas no Windows
+        result = subprocess.run(cmd)
         if result.returncode == 0:
             print(f"[SUCESSO] Executavel: {exe_path}")
             return True
