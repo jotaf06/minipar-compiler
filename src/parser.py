@@ -52,7 +52,7 @@ class C_Sintatico(ISintatico):
             # O ';' ausente pertence ao fim do token anterior (normalmente na linha de cima),
             # e nao ao proximo token, que e onde o parser percebe a falta.
             ant = self._tokens[self._pos - 1]
-            raise ErroSintatico(f"{err_msg} (encontrado: {encontrado})", ant.line, ant.col + len(ant.lexeme))
+            raise ErroSintatico(f"{err_msg} (encontrado: {encontrado})", ant.end_line, ant.end_col)
         raise ErroSintatico(f"{err_msg} (encontrado: {encontrado})", tok.line, tok.col)
 
     def _parse_var_decl(self, declared_type: str = "var", require_semicolon: bool = True) -> ASTNode:
@@ -192,7 +192,9 @@ class C_Sintatico(ISintatico):
         while self._peek().type not in (TokenType.RBRACE, TokenType.END_OF_FILE):
             if self._match(TokenType.VAR): attrs.append(self._parse_var_decl())
             elif self._match(TokenType.FUNC): methods.append(self._parse_func_decl())
-            else: self._consume(TokenType.UNKNOWN, "Esperado 'var' ou 'func' na definicao da classe")
+            else:
+                tok = self._peek()
+                raise ErroSintatico(f"Esperado 'var' ou 'func' na definicao da classe (encontrado: {tok.lexeme!r})", tok.line, tok.col)
         self._consume(TokenType.RBRACE, "Esperado '}' no fim da classe")
         return ClassDecl(name=name, superclass=superclass, attributes=attrs, methods=methods, line=line)
 
@@ -415,4 +417,3 @@ class C_Sintatico(ISintatico):
             stmt = self._parse_statement()
             if stmt: prog.statements.append(stmt)
         return prog
-
