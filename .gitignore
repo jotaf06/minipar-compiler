@@ -20,3 +20,4 @@ __pycache__
 # temp_code/
 !/temp_code/.gitkeep
 /temp_code/*
+.venv/

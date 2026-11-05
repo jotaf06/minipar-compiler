@@ -10,6 +10,7 @@ _CPP_HEADER = """\
 #include <cmath>
 #include <cstdlib>
 #include <type_traits>
+#include <mutex>
 
 #ifdef _WIN32
   #include <winsock2.h>
@@ -105,47 +106,80 @@ public:
     MiniParChannel(std::string ip, int port) : ip(ip), port(port) {}
 
     void sendData(std::string msg) {
-        int sock = socket(AF_INET, SOCK_STREAM, 0);
-        if (sock < 0) return;
         struct sockaddr_in serv_addr;
+        std::memset(&serv_addr, 0, sizeof(serv_addr));
         serv_addr.sin_family = AF_INET;
         serv_addr.sin_port = htons(port);
         inet_pton(AF_INET, ip.c_str(), &serv_addr.sin_addr);
-        
-        for(int i=0; i<50; i++) {
+
+        // Tenta conectar ate o receptor estar escutando (ate ~10 s).
+        // Um socket cujo connect() falhou nao pode ser reutilizado (no Linux),
+        // por isso cada tentativa cria um socket novo.
+        for (int i = 0; i < 100; i++) {
+            int sock = socket(AF_INET, SOCK_STREAM, 0);
+            if (sock < 0) return;
             if (connect(sock, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) >= 0) {
                 send(sock, msg.c_str(), msg.length(), 0);
-                break;
+                CLOSE_SOCK(sock);
+                return;
             }
+            CLOSE_SOCK(sock);
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
-        CLOSE_SOCK(sock);
+        std::cerr << "[ERRO] Canal " << ip << ":" << port << " indisponivel." << std::endl;
     }
 
     std::string receiveData() {
-        int server_fd = socket(AF_INET, SOCK_STREAM, 0);
-        if (server_fd < 0) return "";
+        std::lock_guard<std::mutex> lock(recv_mutex);
+        if (!ensureListening()) return "";
+
+        int conn = accept(listen_fd, nullptr, nullptr);
+        if (conn < 0) return "";
+
+        // Le ate o remetente fechar a conexao (1 conexao = 1 mensagem),
+        // permitindo mensagens maiores que o buffer (ex.: fractais em ASCII).
+        std::string result;
+        char buffer[4096];
+        while (true) {
+            int n = recv(conn, buffer, sizeof(buffer), 0);
+            if (n <= 0) break;
+            result.append(buffer, n);
+        }
+        CLOSE_SOCK(conn);
+        return result;
+    }
+
+    ~MiniParChannel() {
+        if (listen_fd >= 0) CLOSE_SOCK(listen_fd);
+    }
+
+private:
+    // Socket de escuta persistente: criado no primeiro receive e mantido aberto.
+    // Assim, mensagens enviadas antes do proximo receive ficam na fila (backlog)
+    // em vez de serem perdidas quando o socket era fechado a cada recebimento.
+    int listen_fd = -1;
+    std::mutex recv_mutex;
+
+    bool ensureListening() {
+        if (listen_fd >= 0) return true;
+        int fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (fd < 0) return false;
         int opt = 1;
-        setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&opt, sizeof(opt));
-        
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&opt, sizeof(opt));
+
         struct sockaddr_in address;
+        std::memset(&address, 0, sizeof(address));
         address.sin_family = AF_INET;
         address.sin_addr.s_addr = INADDR_ANY;
         address.sin_port = htons(port);
-        
-        if (bind(server_fd, (struct sockaddr*)&address, sizeof(address)) < 0) { CLOSE_SOCK(server_fd); return ""; }
-        if (listen(server_fd, 3) < 0) { CLOSE_SOCK(server_fd); return ""; }
-        
-        int new_socket = accept(server_fd, nullptr, nullptr);
-        if (new_socket < 0) { CLOSE_SOCK(server_fd); return ""; }
-        
-        char buffer[4096] = {0};
-        recv(new_socket, buffer, 4096, 0);
-        std::string result(buffer);
-        
-        CLOSE_SOCK(new_socket);
-        CLOSE_SOCK(server_fd);
-        return result;
+
+        if (bind(fd, (struct sockaddr*)&address, sizeof(address)) < 0 || listen(fd, 64) < 0) {
+            std::cerr << "[ERRO] Nao foi possivel escutar na porta " << port << std::endl;
+            CLOSE_SOCK(fd);
+            return false;
+        }
+        listen_fd = fd;
+        return true;
     }
 };
 

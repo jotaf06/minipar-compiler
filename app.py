@@ -132,7 +132,7 @@ def compile_code():
         # 1. FASE DE COMPILAÇÃO (Gera TAC e C++)
         # ==========================================
         process = subprocess.run(
-            ['python', 'main.py', file_path], 
+            [sys.executable, 'main.py', file_path], 
             capture_output=True, 
             text=True, 
             timeout=15
