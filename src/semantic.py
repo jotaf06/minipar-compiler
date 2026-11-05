@@ -100,9 +100,9 @@ class C_Semantico(ISemantico):
         if isinstance(node, MethodCall):
             return "unknown"
         if isinstance(node, FuncCallExpr):
-            if node.name in ("random", "exp", "len"): return "number"
+            if node.name in ("random", "exp", "len", "to_int", "to_number", "clock"): return "number"
             if node.name in ("range", "parse_ints"): return "list"
-            if node.name == "join_str": return "string"
+            if node.name in ("join_str", "str", "format"): return "string"
             if node.name == "slice" and node.arguments: return self._infer_type(node.arguments[0])
             return "unknown"
         if isinstance(node, IndexExpr):
@@ -319,7 +319,8 @@ class C_Semantico(ISemantico):
         self._loop_depth = 0
         self._promocoes = 0
 
-    FUNCOES_NATIVAS = ("exp", "random", "range", "len", "to_number", "parse_ints", "slice", "join_str")
+    FUNCOES_NATIVAS = ("exp", "random", "range", "len", "to_number", "parse_ints", "slice", "join_str",
+                       "str", "format", "to_int", "clock")
 
     # ---- Tipos das listas (elemento C++) ----
     def _lista_declarada(self, obj: ASTNode) -> Optional[ListLiteral]:

@@ -12,6 +12,8 @@ _CPP_HEADER = """\
 #include <type_traits>
 #include <mutex>
 #include <algorithm>
+#include <charconv>
+#include <iomanip>
 
 #ifdef _WIN32
   #include <winsock2.h>
@@ -123,12 +125,14 @@ auto __array_pop(std::vector<T>& v) {
     return val;
 }
 
-// Helper para formatar e printar std::vector (arrays e matrizes) nativamente
+// Listas sao impressas como no Python: [1, 2.5, 3] (elementos via __to_string)
+template<typename T> std::string __to_string(const T& val);
+
 template <typename T>
 std::ostream& operator<<(std::ostream& os, const std::vector<T>& v) {
     os << "[";
     for (size_t i = 0; i < v.size(); ++i) {
-        os << v[i];
+        os << __to_string(v[i]);
         if (i != v.size() - 1) os << ", ";
     }
     os << "]";
@@ -147,20 +151,96 @@ constexpr bool __is_texto_v = std::is_same_v<std::decay_t<T>, std::string>
                            || std::is_same_v<std::decay_t<T>, char*>
                            || std::is_same_v<std::decay_t<T>, char>;
 
-// Converte qualquer valor para texto (usado por +, send e join_str)
+// Real no formato do Python: menor representacao que preserva o valor
+// (0.1 -> "0.1", 2.0 -> "2.0", 1e-05 -> "1e-05", 1e+16 -> "1e+16")
+inline std::string __real_para_texto(double v) {
+    if (std::isnan(v)) return "nan";
+    if (std::isinf(v)) return v > 0 ? "inf" : "-inf";
+    char buf[64];
+    double a = std::fabs(v);
+    bool cientifico = (a != 0.0) && (a < 1e-4 || a >= 1e16);
+    auto res = std::to_chars(buf, buf + sizeof(buf), v,
+                             cientifico ? std::chars_format::scientific : std::chars_format::fixed);
+    std::string s(buf, res.ptr);
+    if (!cientifico && s.find('.') == std::string::npos) s += ".0";
+    return s;
+}
+
+// Converte qualquer valor para texto, como o str() do Python
+// (usado por print, +, str(), send e join_str)
 template<typename T>
 std::string __to_string(const T& val) {
-    if constexpr (std::is_same_v<std::decay_t<T>, char>) {
+    using D = std::decay_t<T>;
+    if constexpr (std::is_same_v<D, bool>) {
+        return val ? "True" : "False";
+    } else if constexpr (std::is_same_v<D, char>) {
         return std::string(1, val);
     } else if constexpr (std::is_constructible_v<std::string, T>) {
         return std::string(val);
-    } else if constexpr (__is_vector<std::decay_t<T>>::value) {
-        std::ostringstream os;
+    } else if constexpr (std::is_floating_point_v<D>) {
+        return __real_para_texto(static_cast<double>(val));
+    } else if constexpr (std::is_integral_v<D>) {
+        return std::to_string(val);
+    } else {
+        std::ostringstream os;   // listas, matrizes e demais tipos com operator<<
         os << val;
         return os.str();
-    } else {
-        return std::to_string(val);
     }
+}
+
+// print(a, b, ...): valores separados por espaco, como no Python. A linha inteira e
+// montada antes e escrita de uma vez sob um mutex, para que threads (blocos par)
+// nao misturem os caracteres de linhas diferentes.
+inline std::mutex& __print_mutex() { static std::mutex m; return m; }
+
+template<typename... Args>
+void __print(const Args&... args) {
+    std::string linha;
+    bool primeiro = true;
+    ((linha += (primeiro ? "" : " ") + __to_string(args), primeiro = false), ...);
+    linha += '\\n';
+    std::lock_guard<std::mutex> lock(__print_mutex());
+    std::cout << linha << std::flush;
+}
+
+// str(x)
+template<typename T>
+inline std::string __str(const T& x) { return __to_string(x); }
+
+// format(x, casas): real com numero fixo de casas decimais (f"{x:.2f}" do Python)
+template<typename T, typename C>
+inline std::string __format(const T& x, C casas) {
+    std::ostringstream os;
+    os << std::fixed << std::setprecision(static_cast<int>(casas)) << static_cast<double>(x);
+    return os.str();
+}
+
+// to_int(x): parte inteira (trunca em direcao ao zero) ou conversao de texto
+template<typename T>
+inline long long __to_int(const T& x) {
+    if constexpr (__is_texto_v<T>) {
+        try { return std::stoll(__to_string(x)); }
+        catch (...) { __erro_execucao("to_int: valor invalido '" + __to_string(x) + "'"); }
+    } else {
+        return static_cast<long long>(x);
+    }
+}
+
+// to_number(x): numero real a partir de texto ou numero
+template<typename T>
+inline double __to_number(const T& x) {
+    if constexpr (__is_texto_v<T>) {
+        try { return std::stod(__to_string(x)); }
+        catch (...) { __erro_execucao("to_number: valor invalido '" + __to_string(x) + "'"); }
+    } else {
+        return static_cast<double>(x);
+    }
+}
+
+// clock(): tempo em segundos de alta precisao (time.perf_counter() do Python)
+inline double __clock() {
+    using namespace std::chrono;
+    return duration<double>(steady_clock::now().time_since_epoch()).count();
 }
 
 // a + b: soma numerica, concatenacao de texto (convertendo o outro lado) ou de listas

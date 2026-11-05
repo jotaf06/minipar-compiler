@@ -90,7 +90,15 @@ class C_GeradorCpp(IGeradorCpp):
             if node.name == "range":
                 return f"__minipar_range({args})"
             if node.name == "to_number":
-                return f"std::stod({args})"
+                return f"__to_number({args})"
+            if node.name == "to_int":
+                return f"__to_int({args})"
+            if node.name == "str":
+                return f"__str({args})"
+            if node.name == "format":
+                return f"__format({args})"
+            if node.name == "clock":
+                return "__clock()"
             if node.name == "parse_ints":
                 return f"__parse_ints({args})"
             if node.name == "slice":
@@ -210,12 +218,9 @@ class C_GeradorCpp(IGeradorCpp):
             return f"{indent}{chan}->sendData(__to_string({msg}));\n"
 
         if isinstance(node, PrintStmt):
-            parts = []
-            for i, arg in enumerate(node.arguments):
-                if i > 0:
-                    parts.append(' << " "')
-                parts.append(f" << {self._translate_expression(arg)}")
-            return f"{indent}std::cout{ ''.join(parts) } << std::endl;\n"
+            # __print monta a linha no formato do Python e a escreve de uma vez (thread-safe)
+            args = ", ".join(self._translate_expression(arg) for arg in node.arguments)
+            return f"{indent}__print({args});\n"
         
         if isinstance(node, SeqBlock):
             lines = [f"{indent}{{\n"]
