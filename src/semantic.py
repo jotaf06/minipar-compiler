@@ -261,6 +261,3 @@ class C_Semantico(ISemantico):
         for stmt in program.statements: self.validate_node(stmt)
         return not self.erros
 
-
-# Nome antigo mantido por compatibilidade (menu.py, app.py, codigo legado)
-SemanticAnalyzer = C_Semantico
