@@ -171,8 +171,8 @@ inline std::string __real_para_texto(double v) {
 template<typename T>
 std::string __to_string(const T& val) {
     using D = std::decay_t<T>;
-    if constexpr (std::is_same_v<D, bool>) {
-        return val ? "True" : "False";
+    if constexpr (std::is_same_v<D, bool> || std::is_same_v<D, std::vector<bool>::reference>) {
+        return static_cast<bool>(val) ? "True" : "False";
     } else if constexpr (std::is_same_v<D, char>) {
         return std::string(1, val);
     } else if constexpr (std::is_constructible_v<std::string, T>) {
@@ -303,6 +303,33 @@ inline std::string __index(const std::string& s, I idx) {
     if (i < 0) i += static_cast<long long>(s.size());
     if (i < 0 || i >= static_cast<long long>(s.size())) __erro_indice(static_cast<long long>(idx), s.size());
     return std::string(1, s[i]);
+}
+
+// Listas de logicos: std::vector<bool> e compactado (1 bit por elemento) e nao
+// devolve bool&, mas um objeto "proxy"; por isso precisa de versoes proprias.
+template<typename I>
+inline std::vector<bool>::reference __index(std::vector<bool>& v, I idx) {
+    long long i = static_cast<long long>(idx);
+    if (i < 0) i += static_cast<long long>(v.size());
+    if (i < 0 || i >= static_cast<long long>(v.size())) __erro_indice(static_cast<long long>(idx), v.size());
+    return v[i];
+}
+
+template<typename I>
+inline bool __index(const std::vector<bool>& v, I idx) {
+    long long i = static_cast<long long>(idx);
+    if (i < 0) i += static_cast<long long>(v.size());
+    if (i < 0 || i >= static_cast<long long>(v.size())) __erro_indice(static_cast<long long>(idx), v.size());
+    return v[i];
+}
+
+template<typename I>
+inline std::vector<bool>::reference __index_set(std::vector<bool>& v, I idx) {
+    long long i = static_cast<long long>(idx);
+    if (i < 0) i += static_cast<long long>(v.size());
+    if (i < 0) __erro_indice(static_cast<long long>(idx), v.size());
+    if (i >= static_cast<long long>(v.size())) v.resize(i + 1);
+    return v[i];
 }
 
 // Escrita lista[i] = v: alem do fim, a lista cresce (comportamento de pilha)

@@ -125,6 +125,8 @@ class FuncDecl(ASTNode):
     params: List[str]
     body: ASTNode
     line: int = 1
+    # Preenchido pelo semantico: algum return devolve um valor real (C++ retorna double)
+    retorno_real: bool = False
 
 @dataclass
 class ReturnStmt(ASTNode):
@@ -203,6 +205,8 @@ class MatrixCreateExpr(ASTNode):
     cols: ASTNode
     init_value: ASTNode
     line: int = 1
+    # Preenchido pelo semantico: matriz criada com inteiro que recebe valores reais
+    promover_double: bool = False
 
 @dataclass
 class IndexExpr(ASTNode):

@@ -129,6 +129,8 @@ class C_GeradorCpp(IGeradorCpp):
             r = self._translate_expression(node.rows)
             c = self._translate_expression(node.cols)
             v = self._translate_expression(node.init_value)
+            if node.promover_double:
+                v = f"static_cast<double>({v})"
             return f"__make_matrix({r}, {c}, {v})"
         if isinstance(node, IndexExpr):
             obj = self._translate_expression(node.object)
@@ -186,11 +188,13 @@ class C_GeradorCpp(IGeradorCpp):
             return self._uses_float_return(node.value)
         return False
 
-    def _return_type(self, body: Optional[ASTNode]) -> str:
+    def _return_type(self, func: FuncDecl) -> str:
+        body = func.body
         if not self._has_value_return(body):
             return "void"
-        # auto falha no g++ quando há return double e return 0 (int) na mesma função
-        if self._uses_float_return(body):
+        # auto falha no g++ quando há return double e return 0 (int) na mesma função;
+        # retorno_real vem do semantico (ex.: return de uma variavel promovida a double)
+        if func.retorno_real or self._uses_float_return(body):
             return "double"
         return "auto"
 
@@ -315,7 +319,7 @@ class C_GeradorCpp(IGeradorCpp):
                         cpp_code += f"    double {attr.name} = 0;\n"
                 for method in node.methods:
                     params = ", ".join(f"auto {p}" for p in method.params)
-                    ret = self._return_type(method.body)
+                    ret = self._return_type(method)
                     cpp_code += f"    {ret} {method.name}({params}) {{\n"
                     if isinstance(method.body, SeqBlock):
                         for stmt in method.body.statements: cpp_code += self._translate_statement(stmt, "        ")
@@ -324,7 +328,7 @@ class C_GeradorCpp(IGeradorCpp):
                 cpp_code += "};\n\n"
             elif isinstance(node, FuncDecl):
                 params = ", ".join(f"auto {p}" for p in node.params)
-                ret = self._return_type(node.body)
+                ret = self._return_type(node)
                 cpp_code += f"{ret} {node.name}({params}) {{\n"
                 if isinstance(node.body, SeqBlock):
                     for stmt in node.body.statements: cpp_code += self._translate_statement(stmt, "    ")

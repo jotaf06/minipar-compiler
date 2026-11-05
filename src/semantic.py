@@ -34,6 +34,8 @@ class C_Semantico(ISemantico):
         self._loop_depth = 0
         self._class_attr_decls: Dict[str, Dict[str, VarDecl]] = {}
         self._promocoes = 0
+        self._func_node: Optional[FuncDecl] = None
+        self._func_decls: Dict[str, FuncDecl] = {}
         # (classe ou None, funcao) -> indices dos parametros que recebem valor real em
         # alguma chamada. Persiste entre as rodadas da analise (ver analyze()).
         self._params_reais: Dict[tuple, set] = {}
@@ -124,6 +126,7 @@ class C_Semantico(ISemantico):
         for stmt in program.statements:
             if isinstance(stmt, FuncDecl):
                 self._functions[stmt.name] = Simbolo(stmt.name, "FUNC", stmt.line, parametros=list(stmt.params))
+                self._func_decls[stmt.name] = stmt
             elif isinstance(stmt, ClassDecl):
                 attrs = {a.name: a.type for a in stmt.attributes}
                 self._class_attr_decls[stmt.name] = {a.name: a for a in stmt.attributes}
@@ -185,6 +188,8 @@ class C_Semantico(ISemantico):
             self.validate_node(node.value)
             if isinstance(node.target, IndexExpr):
                 self._registrar_elemento(node.target.object, node.value)
+                if isinstance(node.target.object, IndexExpr):
+                    self._registrar_elemento_matriz(node.target.object.object, node.value)
         elif isinstance(node, IdentifierExpr):
             sym = self._lookup(node.name)
             if sym is None:
@@ -252,6 +257,7 @@ class C_Semantico(ISemantico):
             else:
                 self._enter_scope(f"funcao {node.name}")
             old_function = self._current_function
+            old_func_node, self._func_node = self._func_node, node
             self._current_function = node.name
             reais = self._params_reais.get((self._current_class, node.name), set())
             for i, p in enumerate(node.params):
@@ -266,9 +272,15 @@ class C_Semantico(ISemantico):
             else:
                 self.validate_node(node.body)
             self._current_function = old_function
+            self._func_node = old_func_node
             self._exit_scope()
         elif isinstance(node, ReturnStmt):
             if node.value: self.validate_node(node.value)
+            func = self._func_node
+            if func is not None and node.value is not None and not func.retorno_real \
+                    and self._numeric_kind(node.value) == "float":
+                func.retorno_real = True
+                self._promocoes += 1
         elif isinstance(node, MethodCall):
             obj_type = self._infer_type(node.object)
             cls = self._classes.get(obj_type)
@@ -337,22 +349,43 @@ class C_Semantico(ISemantico):
         self._class_attr_decls = {}
         self._loop_depth = 0
         self._promocoes = 0
+        self._func_node = None
 
     FUNCOES_NATIVAS = ("exp", "random", "range", "len", "to_number", "parse_ints", "slice", "join_str",
                        "str", "format", "to_int", "clock")
 
     # ---- Tipos das listas (elemento C++) ----
-    def _lista_declarada(self, obj: ASTNode) -> Optional[ListLiteral]:
-        """Literal de lista que inicializou a variavel/atributo 'obj', se houver."""
+    def _init_declarado(self, obj: ASTNode) -> Optional[ASTNode]:
+        """Expressao que inicializou a variavel/atributo 'obj', se conhecida."""
         decl = None
         if isinstance(obj, IdentifierExpr):
             sym = self._lookup(obj.name)
             decl = sym.declaracao if sym else None
         elif isinstance(obj, PropertyAccess):
             decl = self._attr_decl(obj.object, obj.property_name)
-        if decl is not None and isinstance(decl.init_value, ListLiteral):
-            return decl.init_value
-        return None
+        return decl.init_value if decl is not None else None
+
+    def _lista_declarada(self, obj: ASTNode) -> Optional[ListLiteral]:
+        """Literal de lista que inicializou a variavel/atributo 'obj', se houver."""
+        init = self._init_declarado(obj)
+        return init if isinstance(init, ListLiteral) else None
+
+    def _registrar_elemento_matriz(self, matriz: ASTNode, valor: ASTNode) -> None:
+        """m[i][j] = valor: lista de listas (ou matrix) de inteiros que recebe valor nao
+        inteiro passa a ser de reais, como as listas simples."""
+        if self._numeric_kind(valor) == "int":
+            return
+        raiz = self._init_declarado(matriz)
+        if isinstance(raiz, ListLiteral) and raiz.tipo_elemento == "std::vector<long long>":
+            raiz.tipo_elemento = "std::vector<double>"
+            for linha in raiz.elements:
+                if isinstance(linha, ListLiteral) and linha.tipo_elemento == "long long":
+                    linha.tipo_elemento = "double"
+            self._promocoes += 1
+        elif isinstance(raiz, MatrixCreateExpr) and not raiz.promover_double \
+                and self._numeric_kind(raiz.init_value) == "int":
+            raiz.promover_double = True
+            self._promocoes += 1
 
     def _tipo_cpp(self, node: ASTNode) -> Optional[str]:
         """Tipo C++ de um valor, quando o semantico consegue determinar."""
@@ -421,10 +454,18 @@ class C_Semantico(ISemantico):
         if isinstance(node, FuncCallExpr):
             if node.name in self.FUNCOES_REAIS: return "float"
             if node.name in self.FUNCOES_INTEIRAS: return "int"
+            decl = self._func_decls.get(node.name)
+            if decl is not None and decl.retorno_real: return "float"
         if isinstance(node, IndexExpr):
             lit = self._lista_declarada(node.object)
             if lit is not None:
                 return {"long long": "int", "double": "float"}.get(lit.tipo_elemento)
+            if isinstance(node.object, IndexExpr):          # m[i][j]
+                raiz = self._init_declarado(node.object.object)
+                if isinstance(raiz, ListLiteral):
+                    return {"std::vector<long long>": "int", "std::vector<double>": "float"}.get(raiz.tipo_elemento)
+                if isinstance(raiz, MatrixCreateExpr):
+                    return "float" if raiz.promover_double else self._numeric_kind(raiz.init_value)
         return None
 
     def _attr_decl(self, obj: ASTNode, attr: str) -> Optional[VarDecl]:
