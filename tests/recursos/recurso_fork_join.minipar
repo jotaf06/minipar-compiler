@@ -1,0 +1,52 @@
+# Fork e Join: subtarefas independentes alocadas em nucleos da CPU
+
+# Carga de CPU que o compilador nao consegue eliminar (o resultado e usado)
+func trabalho(id, n) {
+    var soma = 0;
+    var i = 0;
+    while (i < n) {
+        soma = (soma * 31 + i) % 1000003;
+        i = i + 1;
+    }
+    print("  subtarefa", id, "executou no nucleo", nucleo());
+    return soma;
+}
+
+class Relatorio {
+    var titulo = "";
+    func gerar(texto) { return "== " + texto + " =="; }
+}
+
+func avisar(msg) { print("  aviso:", msg); }
+
+var N = 30000000;
+
+print("--- Sequencial ---");
+var inicio = clock();
+var s1 = trabalho(1, N);
+var s2 = trabalho(2, N);
+var s3 = trabalho(3, N);
+var s4 = trabalho(4, N);
+var tempo_seq = clock() - inicio;
+
+print("--- Paralelo (fork em 4 nucleos) ---");
+inicio = clock();
+fork t1 = trabalho(1, N) on core 0;
+fork t2 = trabalho(2, N) on core 1;
+fork t3 = trabalho(3, N) on core 2;
+fork t4 = trabalho(4, N) on core 3;
+var p1 = join t1;
+var p2 = join t2;
+var p3 = join t3;
+var p4 = join t4;
+var tempo_par = clock() - inicio;
+
+print("resultados iguais:", s1 == p1 && s2 == p2 && s3 == p3 && s4 == p4);
+print("Tempo sequencial:", format(tempo_seq, 2), "s | paralelo:", format(tempo_par, 2), "s | speedup:", format(tempo_seq / tempo_par, 2) + "x");
+
+# Fork de metodo, fork sem nucleo definido e join de tarefa sem retorno
+var rel = new Relatorio();
+fork tr = rel.gerar("Benchmark");
+fork ta = avisar("fim do teste");
+print(join tr);
+join;
