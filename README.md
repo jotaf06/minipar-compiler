@@ -158,3 +158,38 @@ seq {
 | `# comentário` | Comentário de linha |
 
 ---
+
+---
+
+## Fork e Join (paralelismo real)
+
+`fork` dispara uma chamada de função como **subtarefa independente**, alocada a um núcleo da CPU ou a outro computador; `join` faz a tarefa principal esperar e, como expressão, recolhe o valor retornado.
+
+```minipar
+fork t1 = avaliar("Professor", lote1) on core 0;                 # núcleo 0 desta máquina
+fork t2 = avaliar("Monitor 1", lote2) on host "192.168.0.10":5400; # outro computador
+fork t3 = gerar_fractal();                                        # núcleo escolhido pelo sistema
+var r1 = join t1;      # espera t1 e recebe o retorno
+join t2, t3;           # apenas espera
+```
+
+- Cada subtarefa recebe **cópias** dos argumentos (dados independentes, como processos).
+- `nucleo()` informa em qual núcleo da CPU o código está executando.
+- O compilador avisa quando a função disparada altera variáveis globais ou atributos de um objeto (estado compartilhado entre subtarefas).
+
+### Execução em dois computadores (`on host`)
+
+O **mesmo executável** roda nos dois computadores; no computador remoto ele é iniciado em modo trabalhador:
+
+```bash
+# 1. Compile o programa nos dois computadores
+python main.py tests/recursos/recurso_fork_remoto.minipar
+
+# 2. Computador remoto (ex.: IP 192.168.0.10): modo trabalhador
+./output/recurso_fork_remoto --worker 5400
+
+# 3. Computador principal: execução normal
+./output/recurso_fork_remoto
+```
+
+Para testar em uma única máquina, use dois terminais e o endereço `"127.0.0.1"`. Em dois computadores, troque o endereço no programa pelo IP do computador remoto e libere a porta no firewall. Apenas funções do programa (não métodos) podem ser executadas remotamente, e os argumentos devem ser números, textos, lógicos ou listas deles.
