@@ -223,7 +223,7 @@ class C_Sintatico(ISintatico):
         self._match(TokenType.SEMICOLON)
         return ReturnStmt(value=value, line=line)
 
-    # <fork_stmt> ::= "fork" IDENT "=" <chamada> [ "on" "core" <expressao> ] ";"
+    # <fork_stmt> ::= "fork" IDENT "=" <chamada> [ "on" ( "core" <expr> | "host" <expr> ":" <expr> ) ] ";"
     def _parse_fork_stmt(self) -> ASTNode:
         line = self._tokens[self._pos - 1].line
         handle = self._consume(TokenType.IDENTIFIER, "Esperado nome da tarefa apos 'fork'").lexeme
@@ -233,12 +233,19 @@ class C_Sintatico(ISintatico):
         if not isinstance(call, (FuncCallExpr, MethodCall)):
             raise ErroSintatico("fork exige uma chamada de funcao ou metodo (ex.: fork t = f(x);)",
                                 call_tok.line, call_tok.col)
-        core = None
+        core = host = porta = None
         if self._match(TokenType.ON):
-            self._consume(TokenType.CORE, "Esperado 'core' apos 'on' (ex.: on core 0)")
-            core = self._parse_expression()
+            if self._match(TokenType.HOST):
+                # <alocacao> ::= "on" "host" <expressao> ":" <expressao>
+                host = self._parse_expression()
+                self._consume(TokenType.COLON, "Esperado ':' entre o endereco e a porta (ex.: on host \"127.0.0.1\":5400)")
+                porta = self._parse_expression()
+            else:
+                # <alocacao> ::= "on" "core" <expressao>
+                self._consume(TokenType.CORE, "Esperado 'core' ou 'host' apos 'on' (ex.: on core 0)")
+                core = self._parse_expression()
         self._consume(TokenType.SEMICOLON, "Esperado ';' apos o fork")
-        return ForkStmt(handle=handle, call=call, core=core, line=line)
+        return ForkStmt(handle=handle, call=call, core=core, line=line, host=host, porta=porta)
 
     # <join_stmt> ::= "join" [ IDENT { "," IDENT } ] ";"
     def _parse_join_stmt(self) -> ASTNode:

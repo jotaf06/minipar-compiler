@@ -236,6 +236,12 @@ class ForkStmt(ASTNode):
     call: ASTNode                    # FuncCallExpr ou MethodCall
     core: Optional[ASTNode] = None   # nucleo da CPU (None: escolhido pelo sistema)
     line: int = 1
+    host: Optional[ASTNode] = None   # on host "ip":porta -> subtarefa em outro computador
+    porta: Optional[ASTNode] = None
+    # Preenchidos pelo semantico para fork remoto: tipos C++ dos argumentos (o computador
+    # remoto precisa deles para reconstruir os valores) e numero do fork no programa
+    tipos_args: List[str] = field(default_factory=list)
+    id_remoto: int = -1
 
 @dataclass
 class JoinStmt(ASTNode):

@@ -132,6 +132,8 @@ class C_GeradorTAC(IGeradorTAC):
             for arg in args:
                 self._emit(f"param {self._expr(arg)}")
             destino = f", core {self._expr(node.core)}" if node.core is not None else ""
+            if node.host is not None:
+                destino = f", host {self._expr(node.host)}:{self._expr(node.porta)}"
             self._emit(f"{node.handle} = fork {nome}, {len(args)}{destino}")
         elif isinstance(node, JoinStmt):
             for h in node.handles_resolvidos:
