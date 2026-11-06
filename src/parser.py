@@ -100,7 +100,7 @@ class C_Sintatico(ISintatico):
         return SendStmt(channel=channel, message=message, line=line)
 
     def _parse_seq_block(self) -> ASTNode:
-        node = SeqBlock()
+        node = SeqBlock(line=self._peek().line)   # linha do '{' (para destacar no editor)
         self._consume(TokenType.LBRACE, "Esperado '{' para iniciar bloco")
         while self._peek().type not in (TokenType.RBRACE, TokenType.END_OF_FILE):
             node.statements.append(self._parse_statement())
@@ -108,7 +108,7 @@ class C_Sintatico(ISintatico):
         return node
 
     def _parse_par_block(self) -> ASTNode:
-        node = ParBlock()
+        node = ParBlock(line=self._peek().line)
         self._consume(TokenType.LBRACE, "Esperado '{' para iniciar bloco PAR")
         while self._peek().type not in (TokenType.RBRACE, TokenType.END_OF_FILE):
             node.statements.append(self._parse_statement())
