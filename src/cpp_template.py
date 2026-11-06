@@ -79,7 +79,13 @@ std::vector<long long> __minipar_range(long long start, long long end) {
 // ---------------------------------------------------------------------------
 // Erros em tempo de execucao: mensagem clara e fim do programa (como o Python)
 // ---------------------------------------------------------------------------
+// Dentro de uma subtarefa remota (modo --worker) o erro nao encerra o trabalhador:
+// vira uma excecao, e a mensagem e devolvida ao computador principal
+struct __ErroRemoto { std::string msg; };
+inline thread_local bool __em_subtarefa_remota = false;
+
 [[noreturn]] void __erro_execucao(const std::string& msg) {
+    if (__em_subtarefa_remota) throw __ErroRemoto{msg};
     std::cout.flush();
     std::cerr << "[ERRO DE EXECUCAO] " << msg << std::endl;
     std::exit(1);
@@ -626,9 +632,19 @@ inline std::string __receber_tudo(int sock) {
 }
 
 // ---- Lado do programa principal: executa uma subtarefa em outro computador ----
+// Gerada pelo compilador: identifica a versao do programa nos pedidos remotos
+extern const char* const __ASSINATURA_PROGRAMA;
+
+inline void __validar_porta(long long porta) {
+    if (porta < 1 || porta > 65535)
+        __erro_execucao("Porta " + std::to_string(porta) + " invalida (use de 1 a 65535)");
+}
+
 template<typename R, typename... Args>
 R __remoto(const std::string& ip, long long porta, int id, const Args&... args) {
-    std::string pedido = std::to_string(id) + "|";
+    __validar_porta(porta);
+    // Pedido: assinatura do programa | numero da subtarefa | argumentos serializados
+    std::string pedido = std::string(__ASSINATURA_PROGRAMA) + "|" + std::to_string(id) + "|";
     (__ser(pedido, args), ...);
 
     struct sockaddr_in destino;
@@ -638,9 +654,10 @@ R __remoto(const std::string& ip, long long porta, int id, const Args&... args) 
     if (inet_pton(AF_INET, ip.c_str(), &destino.sin_addr) != 1)
         __erro_execucao("Endereco invalido em 'on host': " + ip);
 
-    // Tenta conectar por ate ~10 s (o trabalhador pode estar iniciando)
+    // Tenta conectar por ate ~10 s no total (o trabalhador pode estar iniciando)
     int sock = -1;
-    for (int tentativa = 0; tentativa < 100 && sock < 0; tentativa++) {
+    auto limite = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (sock < 0 && std::chrono::steady_clock::now() < limite) {
         int s = static_cast<int>(socket(AF_INET, SOCK_STREAM, 0));
         if (s >= 0 && connect(s, (struct sockaddr*)&destino, sizeof(destino)) >= 0) { sock = s; break; }
         if (s >= 0) CLOSE_SOCK(s);
@@ -682,6 +699,7 @@ std::string __resposta(F chamada) {
 
 // ---- Lado do trabalhador: atende subtarefas, cada uma em sua propria thread ----
 inline void __servir_remoto(long long porta) {
+    __validar_porta(porta);
     int fd = static_cast<int>(socket(AF_INET, SOCK_STREAM, 0));
     int opt = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&opt, sizeof(opt));
@@ -698,16 +716,30 @@ inline void __servir_remoto(long long porta) {
         int conexao = static_cast<int>(accept(fd, nullptr, nullptr));
         if (conexao < 0) continue;
         std::thread([conexao]() {
+            __em_subtarefa_remota = true;
             std::string pedido = __receber_tudo(conexao);
             std::string resposta;
-            std::size_t barra = pedido.find('|');
-            if (barra == std::string::npos) {
+            std::size_t b1 = pedido.find('|');
+            std::size_t b2 = (b1 == std::string::npos) ? b1 : pedido.find('|', b1 + 1);
+            if (b2 == std::string::npos) {
                 resposta = "E|pedido invalido";
+            } else if (pedido.substr(0, b1) != __ASSINATURA_PROGRAMA) {
+                resposta = "E|o trabalhador esta executando outra versao do programa "
+                           "(compile o mesmo .minipar nos dois computadores)";
+                __print("[WORKER] Pedido recusado: versao diferente do programa");
             } else {
-                int id = std::atoi(pedido.substr(0, barra).c_str());
-                __Leitor l{pedido, barra + 1};
+                int id = std::atoi(pedido.substr(b1 + 1, b2 - b1 - 1).c_str());
+                __Leitor l{pedido, b2 + 1};
                 __print("[WORKER] Executando subtarefa", id, "no nucleo", __nucleo());
-                resposta = __executar_remoto(id, l);
+                try {
+                    resposta = __executar_remoto(id, l);
+                } catch (const __ErroRemoto& e) {
+                    resposta = "E|" + e.msg;
+                    __print("[WORKER] Erro na subtarefa", id, ":", e.msg);
+                } catch (const std::exception& e) {
+                    resposta = std::string("E|") + e.what();
+                    __print("[WORKER] Erro na subtarefa", id, ":", e.what());
+                }
             }
             __enviar_tudo(conexao, resposta);
             CLOSE_SOCK(conexao);

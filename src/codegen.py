@@ -1,5 +1,6 @@
 from __future__ import annotations
 import dataclasses
+import hashlib
 from typing import List, Optional
 from ast_nodes import (
     ASTNode, Program, VarDecl, Assignment, PrintStmt, SeqBlock, ParBlock, BinaryExpr, 
@@ -169,8 +170,12 @@ class C_GeradorCpp(IGeradorCpp):
 
     def _gerar_suporte_remoto(self, program: Program) -> str:
         """Funcoes usadas pelo modo trabalhador (--worker) para atender forks remotos."""
+        # 0. Assinatura do programa: o trabalhador recusa pedidos de outra versao do programa
+        #    (os forks remotos sao numerados; outra versao executaria a funcao errada)
+        assinatura = hashlib.sha1(repr(program).encode("utf-8")).hexdigest()[:16]
+        codigo = f'extern const char* const __ASSINATURA_PROGRAMA = "{assinatura}";\n\n'
         # 1. Globais tambem precisam ser inicializadas no computador remoto
-        codigo = "void __iniciar_globais() {\n"
+        codigo += "void __iniciar_globais() {\n"
         for node in program.statements:
             if self._global_tipada(node):
                 expr = self._translate_expression(node.init_value) if node.init_value else "{}"

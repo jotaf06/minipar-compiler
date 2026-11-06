@@ -535,7 +535,8 @@ class C_Semantico(ISemantico):
             if self._numeric_kind(node.core) == "float" or self._infer_type(node.core) not in ("number", "int", "var", "unknown"):
                 self._report(node.line, "O nucleo em 'on core' deve ser um numero inteiro.")
         chave = self._chave_chamada(node.call)
-        if chave in self._funcs_alteram_globais:
+        # (no fork remoto o trabalhador tem as proprias globais: nao ha compartilhamento)
+        if chave in self._funcs_alteram_globais and node.host is None:
             self.avisos.append(Aviso(
                 f"'{chave[1]}' altera variavel global; subtarefas de fork compartilham essa "
                 f"variavel (o enunciado pede subtarefas independentes).", node.line))
