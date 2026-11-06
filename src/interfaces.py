@@ -84,6 +84,10 @@ class ISemantico(ABC):
         """Lista de ErroSemantico encontrados (a analise nao para no primeiro)."""
 
     @abstractmethod
+    def obter_avisos(self) -> List[Any]:
+        """Avisos (problemas que nao impedem a compilacao)."""
+
+    @abstractmethod
     def obter_tabela(self) -> ITabelaSimbolos:
         """Tabela de simbolos preenchida durante a analise."""
 

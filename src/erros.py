@@ -62,3 +62,13 @@ class ErroSemantico(ErroCompilacao):
 
 class ErroGeracao(ErroCompilacao):
     fase = "GERACAO"
+
+
+class Aviso(ErroCompilacao):
+    """Problema que nao impede a compilacao, mas merece atencao (ex.: fork que
+    altera variavel global compartilhada entre subtarefas)."""
+    fase = "AVISO"
+
+    def __str__(self) -> str:
+        posicao = f" Linha {self.linha}:" if self.linha is not None else ""
+        return f"[AVISO]{posicao} {self.mensagem}"

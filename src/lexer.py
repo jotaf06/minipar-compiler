@@ -33,6 +33,10 @@ class TokenType(Enum):
     INPUT     = auto()
     PRINT     = auto()
     MATRIX    = auto()
+    FORK      = auto()   # fork t = f(x) [on core n];
+    JOIN      = auto()   # join t;  /  var r = join t;
+    ON        = auto()
+    CORE      = auto()
     TYPE      = auto()
     PLUS      = auto()
     MINUS     = auto()
@@ -90,6 +94,10 @@ KEYWORDS: dict[str, TokenType] = {
     "receive":   TokenType.RECEIVE,
     "input":     TokenType.INPUT,
     "matrix":    TokenType.MATRIX,
+    "fork":      TokenType.FORK,
+    "join":      TokenType.JOIN,
+    "on":        TokenType.ON,
+    "core":      TokenType.CORE,
     "true":      TokenType.BOOL_LITERAL,
     "false":     TokenType.BOOL_LITERAL,
     "number":    TokenType.TYPE,
