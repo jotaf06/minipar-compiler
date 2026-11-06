@@ -1,4 +1,10 @@
 _CPP_HEADER = """\
+#ifdef _WIN32
+  // Windows 7+: necessario para GetCurrentProcessorNumber (funcao nucleo())
+  #ifndef _WIN32_WINNT
+    #define _WIN32_WINNT 0x0601
+  #endif
+#endif
 #include <iostream>
 #include <string>
 #include <sstream>
@@ -267,22 +273,26 @@ inline void __fixar_nucleo(long long core) {
         std::cerr << "[AVISO] Nucleo " << core << " nao existe (esta maquina tem " << n
                   << "); usando o nucleo " << c << "." << std::endl;
     }
-#ifdef _WIN32
+#if defined(_WIN32)
     SetThreadAffinityMask(GetCurrentThread(), static_cast<DWORD_PTR>(1) << c);
-#else
+#elif defined(__linux__)
     cpu_set_t conjunto;
     CPU_ZERO(&conjunto);
     CPU_SET(c, &conjunto);
     pthread_setaffinity_np(pthread_self(), sizeof(conjunto), &conjunto);
+#else
+    (void)c;   // macOS e outros: o sistema nao permite fixar a thread em um nucleo
 #endif
 }
 
 // nucleo(): numero do nucleo da CPU em que a thread atual esta executando
 inline long long __nucleo() {
-#ifdef _WIN32
+#if defined(_WIN32)
     return static_cast<long long>(GetCurrentProcessorNumber());
-#else
+#elif defined(__linux__)
     return static_cast<long long>(sched_getcpu());
+#else
+    return -1;   // indisponivel nesta plataforma
 #endif
 }
 

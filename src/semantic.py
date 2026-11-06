@@ -42,6 +42,7 @@ class C_Semantico(ISemantico):
         # Funcoes que alteram variaveis globais: num fork, a alteracao seria
         # compartilhada entre subtarefas (persiste entre rodadas)
         self._funcs_alteram_globais: set = set()
+        self._metodos_alteram_atributos: set = set()
         # (classe ou None, funcao) -> indices dos parametros que recebem valor real em
         # alguma chamada. Persiste entre as rodadas da analise (ver analyze()).
         self._params_reais: Dict[tuple, set] = {}
@@ -205,6 +206,9 @@ class C_Semantico(ISemantico):
             sym = self._lookup(node.name)
             if sym is None:
                 self._report(node.line, f"Variavel '{node.name}' nao declarada.")
+            elif sym.tipo == "tarefa":
+                self._report(node.line, f"'{node.name}' e uma tarefa (fork): use 'join {node.name}' "
+                                        f"para esperar o resultado.")
             else:
                 self._verificar_global_em_funcao(sym, node.line)
         elif isinstance(node, BinaryExpr):
@@ -331,6 +335,8 @@ class C_Semantico(ISemantico):
             if cls and node.property_name not in cls.atributos:
                 self._report(node.line, f"Atributo '{node.property_name}' nao declarado em '{obj_type}'.")
             self._promover(self._attr_decl(node.object, node.property_name), node.value)
+            if self._current_class and self._current_function and isinstance(node.object, ThisExpr):
+                self._metodos_alteram_atributos.add((self._current_class, self._current_function))
         elif isinstance(node, NewExpr):
             if node.class_name not in self._classes:
                 self._report(node.line, f"Classe '{node.class_name}' nao declarada.")
@@ -356,9 +362,13 @@ class C_Semantico(ISemantico):
         # nova promocao aconteca (as marcacoes ficam gravadas nos nos VarDecl da AST).
         for _ in range(self.MAX_RODADAS):
             self._nova_rodada()
+            estado_antes = len(self._funcs_alteram_globais) + len(self._metodos_alteram_atributos)
             self._collect_declarations(program)
             for stmt in program.statements: self.validate_node(stmt)
-            if self._promocoes == 0:
+            estado_depois = len(self._funcs_alteram_globais) + len(self._metodos_alteram_atributos)
+            # Nova rodada tambem se descobrimos funcoes que alteram estado: um fork escrito
+            # antes da declaracao da funcao ainda nao tinha gerado o aviso
+            if self._promocoes == 0 and estado_antes == estado_depois:
                 break
         return not self.erros
 
@@ -519,6 +529,10 @@ class C_Semantico(ISemantico):
             self.avisos.append(Aviso(
                 f"'{chave[1]}' altera variavel global; subtarefas de fork compartilham essa "
                 f"variavel (o enunciado pede subtarefas independentes).", node.line))
+        if chave in self._metodos_alteram_atributos:
+            self.avisos.append(Aviso(
+                f"o metodo '{chave[1]}' altera atributos do objeto; forks sobre o mesmo objeto "
+                f"compartilham esses atributos (o enunciado pede subtarefas independentes).", node.line))
         self._define_symbol(node.handle, "tarefa", node.line)
         sym = self._lookup(node.handle)
         if sym is not None and sym.tipo == "tarefa" and sym.declaracao is None:
