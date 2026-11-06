@@ -37,6 +37,11 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 def index():
     return render_template('index.html')
 
+@app.route('/didatico')
+def didatico():
+    """Segunda interface web (MiniPar 2026.2): modo didatico, uma fase por botao."""
+    return render_template('didatico.html')
+
 @app.route('/api/tests', methods=['GET'])
 def get_tests():
     # Retorna os testes ordenados alfabeticamente

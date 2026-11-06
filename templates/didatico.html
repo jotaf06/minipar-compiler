@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MiniPar Didático</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.css">
+    <link rel="stylesheet" href="/static/didatico/didatico.css">
+</head>
+<body>
+    <header class="topo">
+        <div class="marca">
+            <span class="logo">MP</span>
+            <div>
+                <h1>MiniPar 2026.2</h1>
+                <span class="subtitulo">Compilador didático — veja cada fase da compilação</span>
+            </div>
+        </div>
+        <div class="topo-acoes">
+            <label class="rotulo-select" for="exemplos">Exemplo:</label>
+            <select id="exemplos"><option value="">— escolha um programa —</option></select>
+            <a class="link-dev" href="/" title="IDE do desenvolvedor (MiniPar 2026.1)">IDE do desenvolvedor ↗</a>
+        </div>
+    </header>
+
+    <main class="principal">
+        <!-- Editor do codigo MiniPar -->
+        <section class="coluna-editor">
+            <div class="cabecalho-painel">
+                <span>Código MiniPar</span>
+                <span id="status-editor" class="status-editor">editado</span>
+            </div>
+            <textarea id="editor"></textarea>
+        </section>
+
+        <!-- Fases da compilacao -->
+        <section class="coluna-fases">
+            <nav class="pipeline" id="pipeline" aria-label="Fases da compilação"></nav>
+
+            <div class="explicacao" id="explicacao">
+                <strong id="explicacao-titulo">Escolha uma fase</strong>
+                <p id="explicacao-texto">Clique em uma das etapas acima para ver o que o compilador produz nela.
+                    As etapas seguem a ordem da compilação: do texto ao programa em execução.</p>
+            </div>
+
+            <div class="erros" id="erros" hidden></div>
+            <div class="conteudo" id="conteudo">
+                <div class="vazio">
+                    <p>Escreva um programa (ou escolha um exemplo) e clique em <b>1 · Tokens</b> para começar.</p>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <div class="dica" id="dica" hidden></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/addon/mode/simple.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/clike/clike.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+    <script src="/static/didatico/didatico.js"></script>
+</body>
+</html>
