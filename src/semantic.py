@@ -1,4 +1,5 @@
 from __future__ import annotations
+import dataclasses
 from typing import Dict, List, Optional
 from ast_nodes import (
     ASTNode, Program, VarDecl, Assignment, PrintStmt, IdentifierExpr, BinaryExpr,
@@ -44,6 +45,9 @@ class C_Semantico(ISemantico):
         self._funcs_alteram_globais: set = set()
         self._metodos_alteram_atributos: set = set()
         self._proximo_id_remoto = 0   # numera os forks remotos (persiste entre rodadas)
+        self._globais_lidas: Dict[tuple, set] = {}
+        self._globais_alteradas_topo: set = set()
+        self._forks_remotos: List[ForkStmt] = []
         # (classe ou None, funcao) -> indices dos parametros que recebem valor real em
         # alguma chamada. Persiste entre as rodadas da analise (ver analyze()).
         self._params_reais: Dict[tuple, set] = {}
@@ -379,6 +383,7 @@ class C_Semantico(ISemantico):
             # antes da declaracao da funcao ainda nao tinha gerado o aviso
             if self._promocoes == 0 and estado_antes == estado_depois:
                 break
+        self._verificar_globais_remotas(program)
         return not self.erros
 
     MAX_RODADAS = 6
@@ -396,6 +401,9 @@ class C_Semantico(ISemantico):
         self._func_node = None
         self.avisos = []
         self._tarefas = []
+        self._globais_lidas = {}          # (classe, funcao) -> globais lidas pela funcao
+        self._globais_alteradas_topo = set()
+        self._forks_remotos = []
 
     FUNCOES_NATIVAS = ("exp", "random", "range", "len", "to_number", "parse_ints", "slice", "join_str",
                        "str", "format", "to_int", "clock", "nucleo", "write_file")
@@ -600,6 +608,46 @@ class C_Semantico(ISemantico):
         if node.id_remoto < 0:
             node.id_remoto = self._proximo_id_remoto
             self._proximo_id_remoto += 1
+        self._forks_remotos.append(node)
+
+    FUNCOES_PURAS = ("exp", "len", "range", "str", "format", "to_int", "to_number",
+                     "slice", "join_str", "parse_ints")
+
+    def _global_disponivel_remoto(self, nome: str, globais: Dict[str, VarDecl], visitadas: set) -> bool:
+        """A global tem no computador remoto o mesmo valor que no principal? Precisa nao ser
+        alterada durante a execucao e ter expressao inicial pura (mesmo criterio do gerador
+        C++ em __iniciar_globais), dependendo apenas de globais tambem disponiveis."""
+        decl = globais.get(nome)
+        if decl is None or nome in self._globais_alteradas_topo or nome in visitadas:
+            return False
+        visitadas.add(nome)
+        pilha = [decl.init_value]
+        while pilha:
+            no = pilha.pop()
+            if isinstance(no, list):
+                pilha.extend(no)
+                continue
+            if not (isinstance(no, ASTNode) and dataclasses.is_dataclass(no)):
+                continue
+            if isinstance(no, FuncCallExpr) and no.name not in self.FUNCOES_PURAS:
+                return False
+            if isinstance(no, (MethodCall, InputExpr, ReceiveExpr, CChannelExpr, JoinExpr)):
+                return False
+            if isinstance(no, IdentifierExpr) and not self._global_disponivel_remoto(no.name, globais, visitadas):
+                return False
+            pilha.extend(getattr(no, f.name) for f in dataclasses.fields(no))
+        return True
+
+    def _verificar_globais_remotas(self, program: Program) -> None:
+        """Aviso: funcao executada em outro computador le global cujo valor so existe aqui."""
+        globais = {s.name: s for s in program.statements if isinstance(s, VarDecl) and s.escopo_global}
+        for fork in self._forks_remotos:
+            for nome in sorted(self._globais_lidas.get((None, fork.call.name), set())):
+                if not self._global_disponivel_remoto(nome, globais, set()):
+                    self.avisos.append(Aviso(
+                        f"'{fork.call.name}' usa a variavel global '{nome}', cujo valor e calculado "
+                        f"durante a execucao: no computador remoto ela tera apenas o valor inicial. "
+                        f"Passe-a como argumento.", fork.line))
 
     def _validar_join(self, node: JoinStmt) -> None:
         if node.handles:
@@ -642,8 +690,12 @@ class C_Semantico(ISemantico):
 
     def _registrar_alteracao_global(self, sym: Simbolo) -> None:
         decl = sym.declaracao
-        if self._current_function and isinstance(decl, VarDecl) and decl.escopo_global:
+        if not (isinstance(decl, VarDecl) and decl.escopo_global):
+            return
+        if self._current_function:
             self._funcs_alteram_globais.add((self._current_class, self._current_function))
+        else:
+            self._globais_alteradas_topo.add(sym.nome)   # valor muda durante a execucao
 
     def _registrar_alteracao_global_raiz(self, alvo: ASTNode) -> None:
         """lista[i] = v, lista.append(v): a raiz e uma variavel global?"""
@@ -657,6 +709,8 @@ class C_Semantico(ISemantico):
     def _verificar_global_em_funcao(self, sym: Simbolo, linha: int) -> None:
         """Funcoes so enxergam globais cujo tipo o compilador consegue determinar."""
         decl = sym.declaracao
+        if self._current_function and isinstance(decl, VarDecl) and decl.escopo_global:
+            self._globais_lidas.setdefault((self._current_class, self._current_function), set()).add(sym.nome)
         if (self._current_function and isinstance(decl, VarDecl) and decl.escopo_global
                 and not decl.promover_double and decl.tipo_cpp is None):
             self._report(linha, f"Variavel global '{sym.nome}' usada em funcao, mas seu tipo nao "
