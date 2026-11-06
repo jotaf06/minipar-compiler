@@ -520,4 +520,199 @@ private:
     }
 };
 
+
+// ===========================================================================
+// Fork remoto (on host "ip":porta) - MiniPar 2026.2
+// O MESMO executavel roda no outro computador em modo trabalhador:
+//     ./programa --worker 5400
+// O fork envia "id|argumentos" (texto), o trabalhador executa a funcao e devolve
+// "R|resultado" (ou "E|mensagem" em caso de erro). 1 conexao TCP = 1 subtarefa.
+// ===========================================================================
+
+// ---- Serializacao: cada valor vira texto com uma etiqueta de tipo ----
+//   inteiro i<n>;   real d<n>;   logico b0; b1;   texto s<tam>:<bytes>   lista l<tam>:<elementos>
+template<typename T>
+void __ser(std::string& o, const T& v) {
+    if constexpr (std::is_same_v<T, bool>) {
+        o += v ? "b1;" : "b0;";
+    } else if constexpr (std::is_integral_v<T>) {
+        o += "i" + std::to_string(static_cast<long long>(v)) + ";";
+    } else if constexpr (std::is_floating_point_v<T>) {
+        char buf[64];
+        auto res = std::to_chars(buf, buf + sizeof(buf), static_cast<double>(v));
+        o += "d";
+        o.append(buf, res.ptr);
+        o += ";";
+    } else if constexpr (std::is_same_v<T, std::string>) {
+        o += "s" + std::to_string(v.size()) + ":" + v;
+    } else if constexpr (__is_vector<T>::value) {
+        o += "l" + std::to_string(v.size()) + ":";
+        for (std::size_t i = 0; i < v.size(); ++i)
+            __ser(o, static_cast<typename T::value_type>(v[i]));
+    } else {
+        static_assert(sizeof(T) == 0, "tipo nao pode ser enviado a outro computador");
+    }
+}
+
+struct __Leitor {
+    const std::string& s;
+    std::size_t p = 0;
+};
+
+inline std::string __ler_ate(__Leitor& l, char fim) {
+    std::size_t f = l.s.find(fim, l.p);
+    if (f == std::string::npos) __erro_execucao("Mensagem remota incompleta");
+    std::string r = l.s.substr(l.p, f - l.p);
+    l.p = f + 1;
+    return r;
+}
+
+inline void __esperar_etiqueta(__Leitor& l, char etiqueta) {
+    if (l.p >= l.s.size() || l.s[l.p] != etiqueta)
+        __erro_execucao(std::string("Mensagem remota invalida (esperado tipo '") + etiqueta + "')");
+    l.p++;
+}
+
+template<typename T>
+T __des(__Leitor& l) {
+    if constexpr (std::is_same_v<T, bool>) {
+        __esperar_etiqueta(l, 'b');
+        return __ler_ate(l, ';') == "1";
+    } else if constexpr (std::is_integral_v<T>) {
+        __esperar_etiqueta(l, 'i');
+        return static_cast<T>(std::stoll(__ler_ate(l, ';')));
+    } else if constexpr (std::is_floating_point_v<T>) {
+        __esperar_etiqueta(l, 'd');
+        return static_cast<T>(std::stod(__ler_ate(l, ';')));
+    } else if constexpr (std::is_same_v<T, std::string>) {
+        __esperar_etiqueta(l, 's');
+        std::size_t n = std::stoull(__ler_ate(l, ':'));
+        if (l.p + n > l.s.size()) __erro_execucao("Mensagem remota incompleta");
+        std::string r = l.s.substr(l.p, n);
+        l.p += n;
+        return r;
+    } else if constexpr (__is_vector<T>::value) {
+        __esperar_etiqueta(l, 'l');
+        std::size_t n = std::stoull(__ler_ate(l, ':'));
+        T r;
+        r.reserve(n);
+        for (std::size_t i = 0; i < n; ++i) r.push_back(__des<typename T::value_type>(l));
+        return r;
+    } else {
+        static_assert(sizeof(T) == 0, "tipo nao pode ser recebido de outro computador");
+    }
+}
+
+// ---- Envio e recebimento completos por uma conexao TCP ----
+inline bool __enviar_tudo(int sock, const std::string& dados) {
+    std::size_t enviado = 0;
+    while (enviado < dados.size()) {
+        int n = send(sock, dados.data() + enviado, static_cast<int>(dados.size() - enviado), 0);
+        if (n <= 0) return false;
+        enviado += static_cast<std::size_t>(n);
+    }
+    return true;
+}
+
+inline std::string __receber_tudo(int sock) {
+    std::string r;
+    char buf[4096];
+    while (true) {
+        int n = recv(sock, buf, sizeof(buf), 0);
+        if (n <= 0) break;
+        r.append(buf, n);
+    }
+    return r;
+}
+
+// ---- Lado do programa principal: executa uma subtarefa em outro computador ----
+template<typename R, typename... Args>
+R __remoto(const std::string& ip, long long porta, int id, const Args&... args) {
+    std::string pedido = std::to_string(id) + "|";
+    (__ser(pedido, args), ...);
+
+    struct sockaddr_in destino;
+    std::memset(&destino, 0, sizeof(destino));
+    destino.sin_family = AF_INET;
+    destino.sin_port = htons(static_cast<unsigned short>(porta));
+    if (inet_pton(AF_INET, ip.c_str(), &destino.sin_addr) != 1)
+        __erro_execucao("Endereco invalido em 'on host': " + ip);
+
+    // Tenta conectar por ate ~10 s (o trabalhador pode estar iniciando)
+    int sock = -1;
+    for (int tentativa = 0; tentativa < 100 && sock < 0; tentativa++) {
+        int s = static_cast<int>(socket(AF_INET, SOCK_STREAM, 0));
+        if (s >= 0 && connect(s, (struct sockaddr*)&destino, sizeof(destino)) >= 0) { sock = s; break; }
+        if (s >= 0) CLOSE_SOCK(s);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    if (sock < 0)
+        __erro_execucao("Computador " + ip + ":" + std::to_string(porta) + " indisponivel. "
+                        "Inicie la o mesmo programa com: --worker " + std::to_string(porta));
+
+    __enviar_tudo(sock, pedido);
+    shutdown(sock, 1);                       // fim do pedido (SHUT_WR / SD_SEND)
+    std::string resposta = __receber_tudo(sock);
+    CLOSE_SOCK(sock);
+
+    if (resposta.rfind("E|", 0) == 0) __erro_execucao("Computador remoto: " + resposta.substr(2));
+    if (resposta.rfind("R|", 0) != 0)
+        __erro_execucao("O computador " + ip + " encerrou a subtarefa sem responder");
+    if constexpr (!std::is_void_v<R>) {
+        __Leitor l{resposta, 2};
+        return __des<R>(l);
+    }
+}
+
+// Gerados pelo compilador para cada programa (tabela de subtarefas remotas)
+std::string __executar_remoto(int id, __Leitor& l);
+void __iniciar_globais();
+
+template<typename F>
+std::string __resposta(F chamada) {
+    if constexpr (std::is_void_v<decltype(chamada())>) {
+        chamada();
+        return "R|";
+    } else {
+        std::string o = "R|";
+        __ser(o, chamada());
+        return o;
+    }
+}
+
+// ---- Lado do trabalhador: atende subtarefas, cada uma em sua propria thread ----
+inline void __servir_remoto(long long porta) {
+    int fd = static_cast<int>(socket(AF_INET, SOCK_STREAM, 0));
+    int opt = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&opt, sizeof(opt));
+    struct sockaddr_in endereco;
+    std::memset(&endereco, 0, sizeof(endereco));
+    endereco.sin_family = AF_INET;
+    endereco.sin_addr.s_addr = INADDR_ANY;
+    endereco.sin_port = htons(static_cast<unsigned short>(porta));
+    if (fd < 0 || bind(fd, (struct sockaddr*)&endereco, sizeof(endereco)) < 0 || listen(fd, 64) < 0)
+        __erro_execucao("Nao foi possivel escutar na porta " + std::to_string(porta));
+
+    __print("[WORKER] Aguardando subtarefas na porta", porta, "| nucleos disponiveis:", __num_nucleos());
+    while (true) {
+        int conexao = static_cast<int>(accept(fd, nullptr, nullptr));
+        if (conexao < 0) continue;
+        std::thread([conexao]() {
+            std::string pedido = __receber_tudo(conexao);
+            std::string resposta;
+            std::size_t barra = pedido.find('|');
+            if (barra == std::string::npos) {
+                resposta = "E|pedido invalido";
+            } else {
+                int id = std::atoi(pedido.substr(0, barra).c_str());
+                __Leitor l{pedido, barra + 1};
+                __print("[WORKER] Executando subtarefa", id, "no nucleo", __nucleo());
+                resposta = __executar_remoto(id, l);
+            }
+            __enviar_tudo(conexao, resposta);
+            CLOSE_SOCK(conexao);
+        }).detach();
+    }
+}
+
 """
