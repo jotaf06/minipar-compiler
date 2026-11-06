@@ -20,6 +20,8 @@ def compile_file(source_path: str, output_name: str) -> bool:
 
     icontrole: IControle = C_Controle(log=print)
     resultado = icontrole.compilar(source_code, output_name)
+    for aviso in resultado.avisos:
+        print(aviso, file=sys.stderr)
 
     if not resultado.sucesso:
         # Lexico/sintatico param no 1o erro; o semantico reporta todos de uma vez

@@ -5,9 +5,10 @@ from ast_nodes import (
     UnaryExpr, NumberExpr, StringExpr, BoolExpr, SeqBlock, ParBlock, IfStmt, WhileStmt,
     DoWhileStmt, ForStmt, BreakStmt, ContinueStmt, InputExpr,
     ClassDecl, FuncDecl, ReturnStmt, MethodCall, FuncCallExpr, PropertyAccess, PropertyAssign, NewExpr, ThisExpr,
-    CChannelExpr, SendStmt, ReceiveExpr, ListLiteral, MatrixCreateExpr, IndexExpr, IndexAssign
+    CChannelExpr, SendStmt, ReceiveExpr, ListLiteral, MatrixCreateExpr, IndexExpr, IndexAssign,
+    ForkStmt, JoinStmt, JoinExpr
 )
-from erros import ErroSemantico
+from erros import ErroSemantico, Aviso
 from interfaces import ISemantico, ITabelaSimbolos
 from tabela_simbolos import C_TabelaSimbolos, Simbolo
 
@@ -36,6 +37,12 @@ class C_Semantico(ISemantico):
         self._promocoes = 0
         self._func_node: Optional[FuncDecl] = None
         self._func_decls: Dict[str, FuncDecl] = {}
+        self.avisos: List[Aviso] = []
+        self._tarefas: List[str] = []       # tarefas (fork) visiveis, para "join;"
+        # Funcoes que alteram variaveis globais: num fork, a alteracao seria
+        # compartilhada entre subtarefas (persiste entre rodadas)
+        self._funcs_alteram_globais: set = set()
+        self._metodos_alteram_atributos: set = set()
         # (classe ou None, funcao) -> indices dos parametros que recebem valor real em
         # alguma chamada. Persiste entre as rodadas da analise (ver analyze()).
         self._params_reais: Dict[tuple, set] = {}
@@ -46,6 +53,9 @@ class C_Semantico(ISemantico):
 
     def obter_erros(self) -> List[ErroSemantico]:
         return list(self.erros)
+
+    def obter_avisos(self) -> List[Aviso]:
+        return list(self.avisos)
 
     def obter_tabela(self) -> ITabelaSimbolos:
         return self._tabela
@@ -107,7 +117,7 @@ class C_Semantico(ISemantico):
         if isinstance(node, MethodCall):
             return "unknown"
         if isinstance(node, FuncCallExpr):
-            if node.name in ("random", "exp", "len", "to_int", "to_number", "clock"): return "number"
+            if node.name in ("random", "exp", "len", "to_int", "to_number", "clock", "nucleo"): return "number"
             if node.name in ("range", "parse_ints"): return "list"
             if node.name in ("join_str", "str", "format"): return "string"
             if node.name == "slice" and node.arguments: return self._infer_type(node.arguments[0])
@@ -157,6 +167,7 @@ class C_Semantico(ISemantico):
                 self._report(node.line, f"Variavel '{node.name}' nao declarada.")
             else:
                 self._verificar_global_em_funcao(sym, node.line)
+                self._registrar_alteracao_global(sym)
             self.validate_node(node.value)
             if sym is not None:
                 self._promover(sym.declaracao, node.value)
@@ -188,12 +199,16 @@ class C_Semantico(ISemantico):
             self.validate_node(node.value)
             if isinstance(node.target, IndexExpr):
                 self._registrar_elemento(node.target.object, node.value)
+                self._registrar_alteracao_global_raiz(node.target)
                 if isinstance(node.target.object, IndexExpr):
                     self._registrar_elemento_matriz(node.target.object.object, node.value)
         elif isinstance(node, IdentifierExpr):
             sym = self._lookup(node.name)
             if sym is None:
                 self._report(node.line, f"Variavel '{node.name}' nao declarada.")
+            elif sym.tipo == "tarefa":
+                self._report(node.line, f"'{node.name}' e uma tarefa (fork): use 'join {node.name}' "
+                                        f"para esperar o resultado.")
             else:
                 self._verificar_global_em_funcao(sym, node.line)
         elif isinstance(node, BinaryExpr):
@@ -258,6 +273,7 @@ class C_Semantico(ISemantico):
                 self._enter_scope(f"funcao {node.name}")
             old_function = self._current_function
             old_func_node, self._func_node = self._func_node, node
+            old_tarefas, self._tarefas = self._tarefas, []
             self._current_function = node.name
             reais = self._params_reais.get((self._current_class, node.name), set())
             for i, p in enumerate(node.params):
@@ -273,6 +289,7 @@ class C_Semantico(ISemantico):
                 self.validate_node(node.body)
             self._current_function = old_function
             self._func_node = old_func_node
+            self._tarefas = old_tarefas
             self._exit_scope()
         elif isinstance(node, ReturnStmt):
             if node.value: self.validate_node(node.value)
@@ -294,6 +311,8 @@ class C_Semantico(ISemantico):
                 self._registrar_args_reais(obj_type, node.method_name, node.arguments)
             if node.method_name in ("append", "push_back") and len(node.arguments) == 1:
                 self._registrar_elemento(node.object, node.arguments[0])
+            if node.method_name in ("append", "push_back", "pop"):
+                self._registrar_alteracao_global_raiz(node.object)
         elif isinstance(node, FuncCallExpr):
             if node.name not in self._functions and node.name not in self.FUNCOES_NATIVAS:
                 self._report(node.line, f"Funcao '{node.name}' nao declarada.")
@@ -316,6 +335,8 @@ class C_Semantico(ISemantico):
             if cls and node.property_name not in cls.atributos:
                 self._report(node.line, f"Atributo '{node.property_name}' nao declarado em '{obj_type}'.")
             self._promover(self._attr_decl(node.object, node.property_name), node.value)
+            if self._current_class and self._current_function and isinstance(node.object, ThisExpr):
+                self._metodos_alteram_atributos.add((self._current_class, self._current_function))
         elif isinstance(node, NewExpr):
             if node.class_name not in self._classes:
                 self._report(node.line, f"Classe '{node.class_name}' nao declarada.")
@@ -324,6 +345,16 @@ class C_Semantico(ISemantico):
             pass
         elif isinstance(node, InputExpr):
             if node.prompt: self.validate_node(node.prompt)
+        elif isinstance(node, ForkStmt):
+            self._validar_fork(node)
+        elif isinstance(node, JoinStmt):
+            self._validar_join(node)
+        elif isinstance(node, JoinExpr):
+            self._tarefa(node.handle, node.line)
+            func = self._funcao_da_tarefa(node.handle)
+            if func is not None and not self._retorna_valor(func.body):
+                self._report(node.line, f"'join {node.handle}' usado como valor, mas a funcao "
+                                        f"'{func.name}' nao retorna valor (use 'join {node.handle};').")
 
     def analyze(self, program: Program) -> bool:
         # A promocao int -> double pode se propagar: em "y = x * 2", y so vira real
@@ -331,9 +362,13 @@ class C_Semantico(ISemantico):
         # nova promocao aconteca (as marcacoes ficam gravadas nos nos VarDecl da AST).
         for _ in range(self.MAX_RODADAS):
             self._nova_rodada()
+            estado_antes = len(self._funcs_alteram_globais) + len(self._metodos_alteram_atributos)
             self._collect_declarations(program)
             for stmt in program.statements: self.validate_node(stmt)
-            if self._promocoes == 0:
+            estado_depois = len(self._funcs_alteram_globais) + len(self._metodos_alteram_atributos)
+            # Nova rodada tambem se descobrimos funcoes que alteram estado: um fork escrito
+            # antes da declaracao da funcao ainda nao tinha gerado o aviso
+            if self._promocoes == 0 and estado_antes == estado_depois:
                 break
         return not self.erros
 
@@ -350,9 +385,11 @@ class C_Semantico(ISemantico):
         self._loop_depth = 0
         self._promocoes = 0
         self._func_node = None
+        self.avisos = []
+        self._tarefas = []
 
     FUNCOES_NATIVAS = ("exp", "random", "range", "len", "to_number", "parse_ints", "slice", "join_str",
-                       "str", "format", "to_int", "clock")
+                       "str", "format", "to_int", "clock", "nucleo")
 
     # ---- Tipos das listas (elemento C++) ----
     def _init_declarado(self, obj: ASTNode) -> Optional[ASTNode]:
@@ -425,7 +462,7 @@ class C_Semantico(ISemantico):
 
     # ---- Inferencia numerica (int x float), para escolher o tipo C++ ----
     FUNCOES_REAIS = ("exp", "random", "clock", "to_number")
-    FUNCOES_INTEIRAS = ("len", "to_int")
+    FUNCOES_INTEIRAS = ("len", "to_int", "nucleo")
 
     def _numeric_kind(self, node: Optional[ASTNode]) -> Optional[str]:
         """Retorna "int", "float" ou None (nao numerico ou desconhecido)."""
@@ -456,6 +493,9 @@ class C_Semantico(ISemantico):
             if node.name in self.FUNCOES_INTEIRAS: return "int"
             decl = self._func_decls.get(node.name)
             if decl is not None and decl.retorno_real: return "float"
+        if isinstance(node, JoinExpr):
+            func = self._funcao_da_tarefa(node.handle)
+            return "float" if func is not None and func.retorno_real else None
         if isinstance(node, IndexExpr):
             lit = self._lista_declarada(node.object)
             if lit is not None:
@@ -471,6 +511,86 @@ class C_Semantico(ISemantico):
     def _attr_decl(self, obj: ASTNode, attr: str) -> Optional[VarDecl]:
         cls_name = self._infer_type(obj)
         return self._class_attr_decls.get(cls_name, {}).get(attr)
+
+    # ---- Fork / Join ----
+    def _validar_fork(self, node: ForkStmt) -> None:
+        if self._loop_depth > 0:
+            # std::async espera a tarefa ao sair do escopo: num laco, cada volta esperaria
+            # a anterior e os forks rodariam em sequencia, sem paralelismo
+            self._report(node.line, "fork nao pode ser usado dentro de laco: as subtarefas "
+                                    "rodariam uma de cada vez. Use um fork por subtarefa.")
+        self.validate_node(node.call)
+        if node.core is not None:
+            self.validate_node(node.core)
+            if self._numeric_kind(node.core) == "float" or self._infer_type(node.core) not in ("number", "int", "var", "unknown"):
+                self._report(node.line, "O nucleo em 'on core' deve ser um numero inteiro.")
+        chave = self._chave_chamada(node.call)
+        if chave in self._funcs_alteram_globais:
+            self.avisos.append(Aviso(
+                f"'{chave[1]}' altera variavel global; subtarefas de fork compartilham essa "
+                f"variavel (o enunciado pede subtarefas independentes).", node.line))
+        if chave in self._metodos_alteram_atributos:
+            self.avisos.append(Aviso(
+                f"o metodo '{chave[1]}' altera atributos do objeto; forks sobre o mesmo objeto "
+                f"compartilham esses atributos (o enunciado pede subtarefas independentes).", node.line))
+        self._define_symbol(node.handle, "tarefa", node.line)
+        sym = self._lookup(node.handle)
+        if sym is not None and sym.tipo == "tarefa" and sym.declaracao is None:
+            sym.declaracao = node
+            self._tarefas.append(node.handle)
+
+    def _validar_join(self, node: JoinStmt) -> None:
+        if node.handles:
+            for h in node.handles: self._tarefa(h, node.line)
+            node.handles_resolvidos = list(node.handles)
+        else:
+            node.handles_resolvidos = [h for h in self._tarefas
+                                       if (s := self._lookup(h)) is not None and s.tipo == "tarefa"]
+            if not node.handles_resolvidos:
+                self.avisos.append(Aviso("'join;' sem nenhuma tarefa (fork) para esperar.", node.line))
+
+    def _tarefa(self, handle: str, linha: int) -> None:
+        sym = self._lookup(handle)
+        if sym is None:
+            self._report(linha, f"Tarefa '{handle}' nao declarada (crie-a com fork).")
+        elif sym.tipo != "tarefa":
+            self._report(linha, f"'{handle}' nao e uma tarefa criada com fork.")
+
+    def _funcao_da_tarefa(self, handle: str) -> Optional[FuncDecl]:
+        sym = self._lookup(handle)
+        fork = sym.declaracao if sym is not None else None
+        if isinstance(fork, ForkStmt) and isinstance(fork.call, FuncCallExpr):
+            return self._func_decls.get(fork.call.name)
+        return None
+
+    def _chave_chamada(self, call: ASTNode) -> tuple:
+        if isinstance(call, FuncCallExpr):
+            return (None, call.name)
+        if isinstance(call, MethodCall):
+            return (self._infer_type(call.object), call.method_name)
+        return (None, "")
+
+    def _retorna_valor(self, node: Optional[ASTNode]) -> bool:
+        if node is None: return False
+        if isinstance(node, ReturnStmt): return node.value is not None
+        if isinstance(node, (SeqBlock, ParBlock)): return any(self._retorna_valor(s) for s in node.statements)
+        if isinstance(node, IfStmt): return self._retorna_valor(node.then_branch) or self._retorna_valor(node.else_branch)
+        if isinstance(node, (WhileStmt, DoWhileStmt, ForStmt)): return self._retorna_valor(node.body)
+        return False
+
+    def _registrar_alteracao_global(self, sym: Simbolo) -> None:
+        decl = sym.declaracao
+        if self._current_function and isinstance(decl, VarDecl) and decl.escopo_global:
+            self._funcs_alteram_globais.add((self._current_class, self._current_function))
+
+    def _registrar_alteracao_global_raiz(self, alvo: ASTNode) -> None:
+        """lista[i] = v, lista.append(v): a raiz e uma variavel global?"""
+        while isinstance(alvo, IndexExpr):
+            alvo = alvo.object
+        if isinstance(alvo, IdentifierExpr):
+            sym = self._lookup(alvo.name)
+            if sym is not None:
+                self._registrar_alteracao_global(sym)
 
     def _verificar_global_em_funcao(self, sym: Simbolo, linha: int) -> None:
         """Funcoes so enxergam globais cujo tipo o compilador consegue determinar."""

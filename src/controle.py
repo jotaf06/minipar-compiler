@@ -43,6 +43,7 @@ class ResultadoCompilacao:
     sucesso: bool = False
     fase_erro: Optional[str] = None          # fase em que a compilacao parou
     erros: List[ErroCompilacao] = field(default_factory=list)
+    avisos: List[ErroCompilacao] = field(default_factory=list)
     tokens: List[Any] = field(default_factory=list)
     ast: Optional[Any] = None
     simbolos: List[Dict[str, Any]] = field(default_factory=list)
@@ -57,6 +58,7 @@ class ResultadoCompilacao:
             "sucesso": self.sucesso,
             "fase_erro": self.fase_erro,
             "erros": [e.para_dict() for e in self.erros],
+            "avisos": [a.para_dict() for a in self.avisos],
             "tokens": [
                 {"tipo": t.type.name, "lexema": t.lexeme, "linha": t.line, "coluna": t.col}
                 for t in self.tokens
@@ -106,6 +108,7 @@ class C_Controle(IControle):
             semantico = self.semantico_factory()
             valido = semantico.analisar(r.ast)
             r.simbolos = semantico.obter_tabela().exportar()
+            r.avisos = semantico.obter_avisos()
             if not valido:
                 r.erros.extend(semantico.obter_erros())
                 r.fase_erro = fase

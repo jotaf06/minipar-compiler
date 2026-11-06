@@ -224,3 +224,29 @@ class IndexAssign(ASTNode):
 class Program(ASTNode):
     statements: List[ASTNode] = field(default_factory=list)
     line: int = 1
+
+
+# ---------------------------------------------------------------------------
+# Fork / Join (MiniPar 2026.2)
+# ---------------------------------------------------------------------------
+@dataclass
+class ForkStmt(ASTNode):
+    """fork t = chamada(...) [on core n];  -> dispara a chamada como subtarefa paralela."""
+    handle: str
+    call: ASTNode                    # FuncCallExpr ou MethodCall
+    core: Optional[ASTNode] = None   # nucleo da CPU (None: escolhido pelo sistema)
+    line: int = 1
+
+@dataclass
+class JoinStmt(ASTNode):
+    """join t1, t2;  ou  join;  -> espera as subtarefas terminarem."""
+    handles: List[str] = field(default_factory=list)
+    line: int = 1
+    # Preenchido pelo semantico quando "join;" (sem nomes): todas as tarefas visiveis
+    handles_resolvidos: List[str] = field(default_factory=list)
+
+@dataclass
+class JoinExpr(ASTNode):
+    """join t  (em expressao) -> espera a subtarefa e devolve o valor que ela retornou."""
+    handle: str
+    line: int = 1

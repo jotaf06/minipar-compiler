@@ -64,6 +64,7 @@ if  else  while  do  for  in
 break  continue  return
 seq  par  this
 c_channel  send  receive  input  print  matrix
+fork  join  on  core
 true  false
 number  int  string  bool  void  list  dict
 ```
@@ -191,6 +192,8 @@ class Cachorro extends Animal {
             | <atribuicao>
             | <bloco_seq>
             | <bloco_par>
+            | <fork_stmt>
+            | <join_stmt>
             | <comando_if>
             | <comando_while>
             | <comando_do_while>
@@ -285,6 +288,41 @@ par {
     seq { print("Thread B"); }
     seq { print("Thread C"); }
 }
+```
+
+---
+
+### 6.3 Fork e Join (MiniPar 2026.2)
+
+`fork` divide a tarefa principal em subtarefas independentes, executadas em paralelo.
+Cada subtarefa pode ser alocada a um **núcleo da CPU** (`on core n`) ou ficar a cargo
+do sistema operacional. `join` faz a tarefa principal aguardar a conclusão das
+subtarefas e, na forma de expressão, recolhe o valor retornado.
+
+```bnf
+<fork_stmt>  ::= "fork" <IDENTIFIER> "=" <chamada> [ <alocacao> ] ";"
+<chamada>    ::= <IDENTIFIER> "(" [ <argumentos> ] ")"
+               | <expressao_posfixa> "." <IDENTIFIER> "(" [ <argumentos> ] ")"
+<alocacao>   ::= "on" "core" <expressao>
+<join_stmt>  ::= "join" [ <IDENTIFIER> { "," <IDENTIFIER> } ] ";"
+<join_expr>  ::= "join" <IDENTIFIER>            (* alternativa de <expressao_primaria> *)
+```
+
+Regras semânticas: o nome da tarefa não pode ser repetido no mesmo escopo; `join`
+só aceita tarefas criadas com `fork`; `join t` como valor exige que a função retorne
+valor; `fork` não pode estar dentro de laço; o núcleo deve ser inteiro. `join;` sem
+nomes espera todas as tarefas visíveis. Gera **aviso** quando a função disparada
+altera variável global (as subtarefas compartilhariam essa variável).
+
+**Exemplo:**
+
+```minipar
+func avaliar(avaliador, lote) { ... return resultados; }
+
+fork t1 = avaliar("Professor", lote1) on core 0;
+fork t2 = avaliar("Monitor 1", lote2) on core 1;
+var r1 = join t1;      # espera t1 e recebe o retorno
+join t2;               # apenas espera t2
 ```
 
 ---
@@ -523,7 +561,8 @@ As expressões seguem a hierarquia de precedência implementada no parser (da me
                         | "[" <expressao> "]"
                         }
 
-<expressao_primaria> ::= <NUMBER>
+<expressao_primaria> ::= <join_expr>
+                       | <NUMBER>
                        | <STRING_LITERAL>
                        | <BOOL_LITERAL>
                        | <IDENTIFIER> [ "(" [ <lista_argumentos> ] ")" ]
@@ -814,6 +853,8 @@ A seguir a gramática completa em formato BNF, em ordem de definição:
             | <atribuicao>
             | <bloco_seq>
             | <bloco_par>
+            | <fork_stmt>
+            | <join_stmt>
             | <comando_if>
             | <comando_while>
             | <comando_do_while>
@@ -926,7 +967,8 @@ A seguir a gramática completa em formato BNF, em ordem de definição:
                          | "[" <expressao> "]"
                          }
 
-<expressao_primaria> ::= <NUMBER>
+<expressao_primaria> ::= <join_expr>
+                       | <NUMBER>
                        | <STRING_LITERAL>
                        | <BOOL_LITERAL>
                        | <IDENTIFIER> [ "(" [ <lista_argumentos> ] ")" ]

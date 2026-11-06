@@ -8,7 +8,8 @@ from ast_nodes import (
     BinaryExpr, UnaryExpr, NumberExpr, StringExpr, BoolExpr, IdentifierExpr, IfStmt, WhileStmt,
     DoWhileStmt, ForStmt, BreakStmt, ContinueStmt, InputExpr,
     ClassDecl, FuncDecl, ReturnStmt, MethodCall, FuncCallExpr, PropertyAccess, PropertyAssign, NewExpr, ThisExpr,
-    CChannelExpr, SendStmt, ReceiveExpr, ListLiteral, MatrixCreateExpr, IndexExpr, IndexAssign
+    CChannelExpr, SendStmt, ReceiveExpr, ListLiteral, MatrixCreateExpr, IndexExpr, IndexAssign,
+    ForkStmt, JoinStmt, JoinExpr
 )
 
 class C_Sintatico(ISintatico):
@@ -222,6 +223,34 @@ class C_Sintatico(ISintatico):
         self._match(TokenType.SEMICOLON)
         return ReturnStmt(value=value, line=line)
 
+    # <fork_stmt> ::= "fork" IDENT "=" <chamada> [ "on" "core" <expressao> ] ";"
+    def _parse_fork_stmt(self) -> ASTNode:
+        line = self._tokens[self._pos - 1].line
+        handle = self._consume(TokenType.IDENTIFIER, "Esperado nome da tarefa apos 'fork'").lexeme
+        self._consume(TokenType.ASSIGN, "Esperado '=' apos o nome da tarefa")
+        call_tok = self._peek()
+        call = self._parse_expression()
+        if not isinstance(call, (FuncCallExpr, MethodCall)):
+            raise ErroSintatico("fork exige uma chamada de funcao ou metodo (ex.: fork t = f(x);)",
+                                call_tok.line, call_tok.col)
+        core = None
+        if self._match(TokenType.ON):
+            self._consume(TokenType.CORE, "Esperado 'core' apos 'on' (ex.: on core 0)")
+            core = self._parse_expression()
+        self._consume(TokenType.SEMICOLON, "Esperado ';' apos o fork")
+        return ForkStmt(handle=handle, call=call, core=core, line=line)
+
+    # <join_stmt> ::= "join" [ IDENT { "," IDENT } ] ";"
+    def _parse_join_stmt(self) -> ASTNode:
+        line = self._tokens[self._pos - 1].line
+        handles = []
+        if self._peek().type == TokenType.IDENTIFIER:
+            handles.append(self._advance().lexeme)
+            while self._match(TokenType.COMMA):
+                handles.append(self._consume(TokenType.IDENTIFIER, "Esperado nome de tarefa apos ','").lexeme)
+        self._consume(TokenType.SEMICOLON, "Esperado ';' apos o join")
+        return JoinStmt(handles=handles, line=line)
+
     def _parse_statement(self) -> ASTNode:
         if self._match(TokenType.CLASS): return self._parse_class_decl()
         if self._match(TokenType.FUNC): return self._parse_func_decl()
@@ -248,6 +277,8 @@ class C_Sintatico(ISintatico):
         if self._match(TokenType.WHILE): return self._parse_while_stmt()
         if self._match(TokenType.DO): return self._parse_do_while_stmt()
         if self._match(TokenType.FOR): return self._parse_for_stmt()
+        if self._match(TokenType.FORK): return self._parse_fork_stmt()
+        if self._match(TokenType.JOIN): return self._parse_join_stmt()
 
         if self._peek().type in (TokenType.IDENTIFIER, TokenType.THIS, TokenType.NEW, TokenType.RECEIVE, TokenType.INPUT, TokenType.C_CHANNEL, TokenType.MATRIX, TokenType.LBRACKET):
             expr = self._parse_expression()
@@ -339,6 +370,9 @@ class C_Sintatico(ISintatico):
         tok = self._peek()
         node = None
 
+        if self._match(TokenType.JOIN):
+            handle = self._consume(TokenType.IDENTIFIER, "Esperado nome da tarefa apos 'join'").lexeme
+            return JoinExpr(handle=handle, line=tok.line)
         if self._match(TokenType.MATRIX):
             line = tok.line
             self._consume(TokenType.LPAREN, "Esperado '(' apos matrix")

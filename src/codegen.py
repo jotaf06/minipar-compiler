@@ -5,7 +5,8 @@ from ast_nodes import (
     UnaryExpr, NumberExpr, StringExpr, BoolExpr, IdentifierExpr, IfStmt, WhileStmt,
     DoWhileStmt, ForStmt, BreakStmt, ContinueStmt, InputExpr,
     ClassDecl, FuncDecl, ReturnStmt, MethodCall, FuncCallExpr, PropertyAccess, PropertyAssign, NewExpr, ThisExpr,
-    CChannelExpr, SendStmt, ReceiveExpr, ListLiteral, MatrixCreateExpr, IndexExpr, IndexAssign
+    CChannelExpr, SendStmt, ReceiveExpr, ListLiteral, MatrixCreateExpr, IndexExpr, IndexAssign,
+    ForkStmt, JoinStmt, JoinExpr
 )
 from cpp_template import _CPP_HEADER
 from interfaces import IGeradorCpp
@@ -97,6 +98,8 @@ class C_GeradorCpp(IGeradorCpp):
                 return f"__str({args})"
             if node.name == "format":
                 return f"__format({args})"
+            if node.name == "nucleo":
+                return "__nucleo()"
             if node.name == "clock":
                 return "__clock()"
             if node.name == "parse_ints":
@@ -117,6 +120,8 @@ class C_GeradorCpp(IGeradorCpp):
             if node.prompt:
                 return f"input({self._translate_expression(node.prompt)})"
             return "input()"
+        if isinstance(node, JoinExpr):
+            return f"{node.handle}.get()"      # espera a subtarefa e devolve o retorno
 
         if isinstance(node, ListLiteral):
             elems = ", ".join(self._translate_expression(e) for e in node.elements)
@@ -222,6 +227,13 @@ class C_GeradorCpp(IGeradorCpp):
         if isinstance(node, ContinueStmt):
             return f"{indent}continue;\n"
         
+        if isinstance(node, ForkStmt):
+            # [=]: a subtarefa recebe copias dos argumentos (dados independentes)
+            core = self._translate_expression(node.core) if node.core is not None else "-1LL"
+            call = self._translate_expression(node.call)
+            return f"{indent}auto {node.handle} = __fork({core}, [=]() {{ return {call}; }});\n"
+        if isinstance(node, JoinStmt):
+            return "".join(f"{indent}{h}.wait();\n" for h in node.handles_resolvidos)
         if isinstance(node, SendStmt):
             chan = self._translate_expression(node.channel)
             msg = self._translate_expression(node.message)
