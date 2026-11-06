@@ -21,6 +21,7 @@ _CPP_HEADER = """\
 #include <charconv>
 #include <iomanip>
 #include <future>
+#include <fstream>
 #ifndef _WIN32
   #include <pthread.h>
   #include <sched.h>
@@ -252,6 +253,13 @@ inline double __to_number(const T& x) {
     } else {
         return static_cast<double>(x);
     }
+}
+
+// write_file(caminho, texto): grava o texto em um arquivo (ex.: desenho SVG)
+inline void __write_file(const std::string& caminho, const std::string& texto) {
+    std::ofstream arquivo(caminho, std::ios::binary);
+    if (!arquivo) __erro_execucao("Nao foi possivel criar o arquivo '" + caminho + "'");
+    arquivo << texto;
 }
 
 // clock(): tempo em segundos de alta precisao (time.perf_counter() do Python)

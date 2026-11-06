@@ -121,6 +121,9 @@ class C_Semantico(ISemantico):
             if node.name in ("random", "exp", "len", "to_int", "to_number", "clock", "nucleo"): return "number"
             if node.name in ("range", "parse_ints"): return "list"
             if node.name in ("join_str", "str", "format"): return "string"
+            decl = self._func_decls.get(node.name)
+            if decl is not None and decl.tipo_retorno == "std::string": return "string"
+            if decl is not None and decl.tipo_retorno and decl.tipo_retorno.startswith("std::vector"): return "list"
             if node.name == "slice" and node.arguments: return self._infer_type(node.arguments[0])
             return "unknown"
         if isinstance(node, IndexExpr):
@@ -299,6 +302,11 @@ class C_Semantico(ISemantico):
                     and self._numeric_kind(node.value) == "float":
                 func.retorno_real = True
                 self._promocoes += 1
+            if func is not None and node.value is not None and func.tipo_retorno is None:
+                tipo = self._tipo_cpp(node.value)
+                if tipo:
+                    func.tipo_retorno = tipo     # usado por quem recebe o retorno (ex.: append)
+                    self._promocoes += 1
         elif isinstance(node, MethodCall):
             obj_type = self._infer_type(node.object)
             cls = self._classes.get(obj_type)
@@ -390,7 +398,7 @@ class C_Semantico(ISemantico):
         self._tarefas = []
 
     FUNCOES_NATIVAS = ("exp", "random", "range", "len", "to_number", "parse_ints", "slice", "join_str",
-                       "str", "format", "to_int", "clock", "nucleo")
+                       "str", "format", "to_int", "clock", "nucleo", "write_file")
 
     # ---- Tipos das listas (elemento C++) ----
     def _init_declarado(self, obj: ASTNode) -> Optional[ASTNode]:
@@ -440,9 +448,18 @@ class C_Semantico(ISemantico):
             init = self._init_declarado(node)
             if isinstance(init, (ListLiteral, FuncCallExpr)):
                 return self._tipo_cpp(init)
+        if isinstance(node, IndexExpr):
+            # lista[i]: tipo dos elementos da lista; texto[i]: texto
+            tipo_obj = self._tipo_cpp(node.object)
+            if tipo_obj == "std::string": return "std::string"
+            if tipo_obj and tipo_obj.startswith("std::vector<") and tipo_obj.endswith(">"):
+                return tipo_obj[len("std::vector<"):-1]
         if isinstance(node, FuncCallExpr):
             if node.name == "slice" and node.arguments: return self._tipo_cpp(node.arguments[0])
             if node.name in ("parse_ints", "range"): return "std::vector<long long>"
+            decl = self._func_decls.get(node.name)
+            if decl is not None and decl.tipo_retorno:
+                return "double" if decl.retorno_real and decl.tipo_retorno == "long long" else decl.tipo_retorno
         return None
 
     def _tipo_elementos(self, elementos: List[ASTNode]) -> Optional[str]:
@@ -501,6 +518,7 @@ class C_Semantico(ISemantico):
             if node.name in self.FUNCOES_INTEIRAS: return "int"
             decl = self._func_decls.get(node.name)
             if decl is not None and decl.retorno_real: return "float"
+            if decl is not None and decl.tipo_retorno == "long long": return "int"
         if isinstance(node, JoinExpr):
             func = self._funcao_da_tarefa(node.handle)
             return "float" if func is not None and func.retorno_real else None

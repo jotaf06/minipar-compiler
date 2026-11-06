@@ -127,6 +127,8 @@ class FuncDecl(ASTNode):
     line: int = 1
     # Preenchido pelo semantico: algum return devolve um valor real (C++ retorna double)
     retorno_real: bool = False
+    # Preenchido pelo semantico: tipo C++ do valor retornado, quando conhecido
+    tipo_retorno: Optional[str] = None
 
 @dataclass
 class ReturnStmt(ASTNode):
