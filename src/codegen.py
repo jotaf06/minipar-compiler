@@ -1,5 +1,7 @@
 from __future__ import annotations
-from typing import Optional
+import dataclasses
+import hashlib
+from typing import List, Optional
 from ast_nodes import (
     ASTNode, Program, VarDecl, Assignment, PrintStmt, SeqBlock, ParBlock, BinaryExpr, 
     UnaryExpr, NumberExpr, StringExpr, BoolExpr, IdentifierExpr, IfStmt, WhileStmt,
@@ -153,6 +155,49 @@ class C_GeradorCpp(IGeradorCpp):
         return self._translate_expression(target)
 
     @staticmethod
+    def _nos(node) -> List[ASTNode]:
+        """Todos os nos da AST abaixo de 'node' (percorre os campos das dataclasses)."""
+        encontrados = []
+        pilha = [node]
+        while pilha:
+            atual = pilha.pop()
+            if isinstance(atual, list):
+                pilha.extend(atual)
+            elif isinstance(atual, ASTNode) and dataclasses.is_dataclass(atual):
+                encontrados.append(atual)
+                pilha.extend(getattr(atual, f.name) for f in dataclasses.fields(atual))
+        return encontrados
+
+    def _gerar_suporte_remoto(self, program: Program) -> str:
+        """Funcoes usadas pelo modo trabalhador (--worker) para atender forks remotos."""
+        # 0. Assinatura do programa: o trabalhador recusa pedidos de outra versao do programa
+        #    (os forks remotos sao numerados; outra versao executaria a funcao errada)
+        assinatura = hashlib.sha1(repr(program).encode("utf-8")).hexdigest()[:16]
+        codigo = f'extern const char* const __ASSINATURA_PROGRAMA = "{assinatura}";\n\n'
+        # 1. Globais tambem precisam ser inicializadas no computador remoto
+        codigo += "void __iniciar_globais() {\n"
+        for node in program.statements:
+            if self._global_tipada(node):
+                expr = self._translate_expression(node.init_value) if node.init_value else "{}"
+                codigo += f"    {node.name} = {expr};\n"
+        codigo += "}\n\n"
+        # 2. Tabela de subtarefas: reconstroi os argumentos e chama a funcao
+        codigo += "std::string __executar_remoto(int id, __Leitor& l) {\n    switch (id) {\n"
+        vistos = set()
+        for fork in self._nos(program):
+            if not isinstance(fork, ForkStmt) or fork.host is None or fork.id_remoto in vistos:
+                continue
+            vistos.add(fork.id_remoto)
+            codigo += f"    case {fork.id_remoto}: {{\n"
+            nomes = []
+            for i, tipo in enumerate(fork.tipos_args):
+                codigo += f"        auto a{i} = __des<{tipo}>(l);\n"
+                nomes.append(f"a{i}")
+            codigo += f"        return __resposta([&]() {{ return {fork.call.name}({', '.join(nomes)}); }});\n    }}\n"
+        codigo += "    }\n    return \"E|subtarefa remota desconhecida\";\n}\n\n"
+        return codigo
+
+    @staticmethod
     def _global_tipada(node: ASTNode) -> bool:
         """Variavel do topo do programa com tipo conhecido: vira global no C++."""
         return (isinstance(node, VarDecl) and node.escopo_global
@@ -229,8 +274,16 @@ class C_GeradorCpp(IGeradorCpp):
         
         if isinstance(node, ForkStmt):
             # [=]: a subtarefa recebe copias dos argumentos (dados independentes)
-            core = self._translate_expression(node.core) if node.core is not None else "-1LL"
             call = self._translate_expression(node.call)
+            if node.host is not None:
+                # Outro computador: envia id + argumentos e espera o resultado (tipo de retorno
+                # obtido com decltype da propria chamada, sem executa-la localmente)
+                host = self._translate_expression(node.host)
+                porta = self._translate_expression(node.porta)
+                args = "".join(", " + self._translate_expression(a) for a in node.call.arguments)
+                remoto = f"__remoto<decltype({call})>({host}, {porta}, {node.id_remoto}{args})"
+                return f"{indent}auto {node.handle} = __fork(-1LL, [=]() {{ return {remoto}; }});\n"
+            core = self._translate_expression(node.core) if node.core is not None else "-1LL"
             return f"{indent}auto {node.handle} = __fork({core}, [=]() {{ return {call}; }});\n"
         if isinstance(node, JoinStmt):
             return "".join(f"{indent}{h}.wait();\n" for h in node.handles_resolvidos)
@@ -347,7 +400,13 @@ class C_GeradorCpp(IGeradorCpp):
                 else: cpp_code += self._translate_statement(node.body, "    ")
                 cpp_code += "}\n\n"
 
-        cpp_code += "int main() {\n    #ifdef _WIN32\n        WSADATA wsa;\n        WSAStartup(MAKEWORD(2,2), &wsa);\n    #endif\n\n"
+        cpp_code += self._gerar_suporte_remoto(program)
+        cpp_code += "int main(int argc, char** argv) {\n    #ifdef _WIN32\n        WSADATA wsa;\n        WSAStartup(MAKEWORD(2,2), &wsa);\n    #endif\n\n"
+        # Modo trabalhador (fork remoto): ./programa --worker PORTA
+        cpp_code += ("    if (argc >= 3 && std::string(argv[1]) == \"--worker\") {\n"
+                     "        __iniciar_globais();\n"
+                     "        __servir_remoto(std::atoll(argv[2]));\n"
+                     "        return 0;\n    }\n\n")
         for node in program.statements:
             if self._global_tipada(node):
                 expr = self._translate_expression(node.init_value) if node.init_value else "{}"

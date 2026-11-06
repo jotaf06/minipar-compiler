@@ -43,6 +43,7 @@ class C_Semantico(ISemantico):
         # compartilhada entre subtarefas (persiste entre rodadas)
         self._funcs_alteram_globais: set = set()
         self._metodos_alteram_atributos: set = set()
+        self._proximo_id_remoto = 0   # numera os forks remotos (persiste entre rodadas)
         # (classe ou None, funcao) -> indices dos parametros que recebem valor real em
         # alguma chamada. Persiste entre as rodadas da analise (ver analyze()).
         self._params_reais: Dict[tuple, set] = {}
@@ -435,6 +436,13 @@ class C_Semantico(ISemantico):
         if tipo in self._classes: return f"std::shared_ptr<{tipo}>"
         if isinstance(node, ListLiteral) and node.tipo_elemento:
             return f"std::vector<{node.tipo_elemento}>"
+        if isinstance(node, (IdentifierExpr, PropertyAccess)):
+            init = self._init_declarado(node)
+            if isinstance(init, (ListLiteral, FuncCallExpr)):
+                return self._tipo_cpp(init)
+        if isinstance(node, FuncCallExpr):
+            if node.name == "slice" and node.arguments: return self._tipo_cpp(node.arguments[0])
+            if node.name in ("parse_ints", "range"): return "std::vector<long long>"
         return None
 
     def _tipo_elementos(self, elementos: List[ASTNode]) -> Optional[str]:
@@ -520,12 +528,15 @@ class C_Semantico(ISemantico):
             self._report(node.line, "fork nao pode ser usado dentro de laco: as subtarefas "
                                     "rodariam uma de cada vez. Use um fork por subtarefa.")
         self.validate_node(node.call)
+        if node.host is not None:
+            self._validar_fork_remoto(node)
         if node.core is not None:
             self.validate_node(node.core)
             if self._numeric_kind(node.core) == "float" or self._infer_type(node.core) not in ("number", "int", "var", "unknown"):
                 self._report(node.line, "O nucleo em 'on core' deve ser um numero inteiro.")
         chave = self._chave_chamada(node.call)
-        if chave in self._funcs_alteram_globais:
+        # (no fork remoto o trabalhador tem as proprias globais: nao ha compartilhamento)
+        if chave in self._funcs_alteram_globais and node.host is None:
             self.avisos.append(Aviso(
                 f"'{chave[1]}' altera variavel global; subtarefas de fork compartilham essa "
                 f"variavel (o enunciado pede subtarefas independentes).", node.line))
@@ -538,6 +549,39 @@ class C_Semantico(ISemantico):
         if sym is not None and sym.tipo == "tarefa" and sym.declaracao is None:
             sym.declaracao = node
             self._tarefas.append(node.handle)
+
+    TIPOS_TRANSPORTAVEIS = ("long long", "double", "bool", "std::string")
+
+    def _transportavel(self, tipo: Optional[str]) -> bool:
+        """Tipos que podem ser enviados pela rede: numeros, texto, logicos e listas deles."""
+        if tipo is None: return False
+        if tipo in self.TIPOS_TRANSPORTAVEIS: return True
+        if tipo.startswith("std::vector<") and tipo.endswith(">"):
+            return self._transportavel(tipo[len("std::vector<"):-1])
+        return False
+
+    def _validar_fork_remoto(self, node: ForkStmt) -> None:
+        self.validate_node(node.host)
+        self.validate_node(node.porta)
+        if self._infer_type(node.host) not in ("string", "unknown"):
+            self._report(node.line, "O endereco em 'on host' deve ser um texto (ex.: \"192.168.0.10\").")
+        if self._numeric_kind(node.porta) == "float" or self._infer_type(node.porta) not in ("number", "int", "var", "unknown"):
+            self._report(node.line, "A porta em 'on host' deve ser um numero inteiro.")
+        call = node.call
+        if not isinstance(call, FuncCallExpr) or call.name not in self._func_decls:
+            self._report(node.line, "fork em outro computador (on host) aceita apenas funcoes declaradas "
+                                    "no programa (metodos e funcoes nativas nao podem ser executados remotamente).")
+            return
+        node.tipos_args = []
+        for i, arg in enumerate(call.arguments):
+            tipo = self._tipo_cpp(arg)
+            if not self._transportavel(tipo):
+                self._report(node.line, f"Argumento {i + 1} de '{call.name}' nao pode ser enviado a outro computador: "
+                                        f"o tipo deve ser numero, texto, logico ou lista deles, conhecido pelo compilador.")
+            node.tipos_args.append(tipo or "?")
+        if node.id_remoto < 0:
+            node.id_remoto = self._proximo_id_remoto
+            self._proximo_id_remoto += 1
 
     def _validar_join(self, node: JoinStmt) -> None:
         if node.handles:

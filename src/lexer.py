@@ -37,6 +37,8 @@ class TokenType(Enum):
     JOIN      = auto()   # join t;  /  var r = join t;
     ON        = auto()
     CORE      = auto()
+    HOST      = auto()   # fork t = f(x) on host "ip":porta;
+    COLON     = auto()   # :
     TYPE      = auto()
     PLUS      = auto()
     MINUS     = auto()
@@ -98,6 +100,7 @@ KEYWORDS: dict[str, TokenType] = {
     "join":      TokenType.JOIN,
     "on":        TokenType.ON,
     "core":      TokenType.CORE,
+    "host":      TokenType.HOST,
     "true":      TokenType.BOOL_LITERAL,
     "false":     TokenType.BOOL_LITERAL,
     "number":    TokenType.TYPE,
@@ -214,7 +217,7 @@ class C_Lexico(ILexico):
                 tokens.append(self._make_token(TokenType.STRING_LITERAL, text, start_line, start_col))
             else:
                 op = self._advance()
-                single_map = {"+": TokenType.PLUS, "-": TokenType.MINUS, "*": TokenType.STAR, "/": TokenType.SLASH, "%": TokenType.MOD, "{": TokenType.LBRACE, "}": TokenType.RBRACE, "(": TokenType.LPAREN, ")": TokenType.RPAREN, "[": TokenType.LBRACKET, "]": TokenType.RBRACKET, ";": TokenType.SEMICOLON, ",": TokenType.COMMA, ".": TokenType.DOT}
+                single_map = {"+": TokenType.PLUS, "-": TokenType.MINUS, "*": TokenType.STAR, "/": TokenType.SLASH, "%": TokenType.MOD, "{": TokenType.LBRACE, "}": TokenType.RBRACE, "(": TokenType.LPAREN, ")": TokenType.RPAREN, "[": TokenType.LBRACKET, "]": TokenType.RBRACKET, ";": TokenType.SEMICOLON, ":": TokenType.COLON, ",": TokenType.COMMA, ".": TokenType.DOT}
                 if op == "=":
                     if self._peek() == "=":
                         self._advance()

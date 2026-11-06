@@ -1,0 +1,39 @@
+# Fork remoto: subtarefas executadas em outro computador (on host "ip":porta)
+#
+# Execucao em localhost (dois terminais):
+#   Terminal 2 (computador remoto):  ./output/recurso_fork_remoto --worker 5400
+#   Terminal 1 (computador local):   ./output/recurso_fork_remoto
+# Em dois computadores, troque "127.0.0.1" pelo IP do computador remoto.
+
+var PREFIXO = "Concluiu";
+
+func avaliar(avaliador, lote) {
+    var resultados = [];
+    for (var tarefa in lote) {
+        resultados.append("[" + avaliador + "] " + PREFIXO + ": " + tarefa);
+    }
+    return resultados;
+}
+
+func media(notas) {
+    var soma = 0.0;
+    for (var n in notas) { soma = soma + n; }
+    return soma / len(notas);
+}
+
+func registrar(msg) { print("  registro:", msg); }
+
+var tarefas = ["Aluno 1 - Atividade 1", "Aluno 1 - Atividade 2", "Aluno 2 - Atividade 1", "Aluno 2 - Atividade 2"];
+var notas = [7.5, 8.0, 9.5];
+
+fork local = avaliar("Professor", slice(tarefas, 0, 2)) on core 0;
+fork remota = avaliar("Monitor 1", slice(tarefas, 2, 4)) on host "127.0.0.1":5400;
+fork calculo = media(notas) on host "127.0.0.1":5400;
+fork aviso = registrar("subtarefa sem retorno") on host "127.0.0.1":5400;
+
+var r1 = join local;
+var r2 = join remota;
+print("Local :", join_str(r1, " | "));
+print("Remota:", join_str(r2, " | "));
+print("Media calculada no computador remoto:", join calculo);
+join aviso;
