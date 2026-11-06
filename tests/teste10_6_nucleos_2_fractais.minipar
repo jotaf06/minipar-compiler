@@ -1,0 +1,295 @@
+# Programa de Teste 10 - MiniPar 2026.2
+# Avaliacao de Atividades em Paralelo com 4 Avaliadores (nucleos 1 a 4), Fractal de
+# Mandelbrot em ASCII (nucleo 5) e Tapete de Sierpinski (nucleo 6) - 6 subtarefas.
+
+# ==============================================================================
+# PASSO 1: RECURSOS NATIVOS
+# ==============================================================================
+
+# Texto do fractal gerado na execucao paralela (exibido apos o benchmark de tempo)
+var texto_fractal = "";
+var texto_sierpinski = "";
+
+# --- 1.1 Gerador de Numeros Pseudoaleatorios (LCG) ---
+class GeradorAleatorio {
+    var estado = 123456789;
+
+    # Gera um decimal aleatorio entre 'minimo' e 'maximo'
+    func uniforme(minimo, maximo) {
+        this.estado = (this.estado * 1103515245 + 12345) & 0x7FFFFFFF;
+        var fracao = this.estado / 2147483647.0;
+        return minimo + (maximo - minimo) * fracao;
+    }
+}
+
+# --- 1.2 Simulacao de Carga de CPU ---
+# Consome ciclos de CPU (espera ativa) durante o tempo de trabalho simulado.
+# ESCALA_TEMPO reduz os segundos simulados para manter a duracao do teste
+# proxima a do programa original em Python.
+var ESCALA_TEMPO = 0.2;
+
+func simular_atraso(segundos) {
+    var fim = clock() + segundos * ESCALA_TEMPO;
+    var ciclos = 0;
+    while (clock() < fim) {
+        ciclos = ciclos + 1;
+    }
+    return ciclos;
+}
+
+# ==============================================================================
+# PASSO 2: CONFIGURACAO DO CENARIO
+# ==============================================================================
+
+var NUM_ALUNOS = 40;
+var ATIVIDADES_POR_ALUNO = 4;
+var TOTAL_ATIVIDADES = NUM_ALUNOS * ATIVIDADES_POR_ALUNO;   # 160 atividades
+
+var AVALIADORES = ["Professor", "Monitor 1", "Monitor 2", "Monitor 3"];
+
+# Criamos as 160 tarefas a serem corrigidas
+var tarefas = [];
+var aluno = 0;
+while (aluno < NUM_ALUNOS) {
+    var atividade = 0;
+    while (atividade < ATIVIDADES_POR_ALUNO) {
+        tarefas.append("Aluno " + (aluno + 1) + " - Atividade " + (atividade + 1));
+        atividade = atividade + 1;
+    }
+    aluno = aluno + 1;
+}
+
+# ==============================================================================
+# PASSO 3: FUNCOES DE TRABALHO DOS NUCLEOS
+# ==============================================================================
+
+# Simula a correcao de uma atividade individual
+func avaliar_atividade(tarefa, avaliador, gerador) {
+    var tempo_correcao = gerador.uniforme(0.05, 0.15);
+    simular_atraso(tempo_correcao);
+    return "[" + avaliador + "] Concluiu: " + tarefa;
+}
+
+# Funcao executada de forma independente por cada nucleo da CPU
+func trabalhador_nucleo(avaliador, lote_tarefas) {
+    var gerador = new GeradorAleatorio();
+    var resultados_locais = [];
+    for (var tarefa in lote_tarefas) {
+        resultados_locais.append(avaliar_atividade(tarefa, avaliador, gerador));
+    }
+    # Devolve a lista de atividades corrigidas ao processo principal (join)
+    return resultados_locais;
+}
+
+
+# --- Tarefa do Fractal de Mandelbrot (Nucleo 5) ---
+# Calcula um Fractal de Mandelbrot em arte ASCII
+func trabalhador_fractal() {
+    var largura = 50;
+    var altura = 20;
+    var max_iter = 100;
+    var caracteres = " .:-=+#%@";
+
+    var linhas_fractal = ["\n=== FRACTAL DE MANDELBROT (Gerado pelo Núcleo 5) ==="];
+
+    var y = 0;
+    while (y < altura) {
+        var linha = "";
+        # Mapeia a coordenada Y para o plano complexo [-1.2, 1.2]
+        var cy = (y / altura) * 2.4 - 1.2;
+        var x = 0;
+        while (x < largura) {
+            # Mapeia a coordenada X para o plano complexo [-2.0, 1.0]
+            var cx = (x / largura) * 3.0 - 2.0;
+
+            # Equacao complexa do Fractal: z = z^2 + c
+            var zx = 0.0;
+            var zy = 0.0;
+            var iteracao = 0;
+            while (zx * zx + zy * zy <= 4.0 && iteracao < max_iter) {
+                var tmp = zx * zx - zy * zy + cx;
+                zy = 2.0 * zx * zy + cy;
+                zx = tmp;
+                iteracao = iteracao + 1;
+            }
+
+            # Mapeia o numero de iteracoes para um caractere de texto
+            var char_idx = to_int((iteracao / max_iter) * (len(caracteres) - 1));
+            linha = linha + caracteres[char_idx];
+            x = x + 1;
+        }
+        linhas_fractal.append(linha);
+        y = y + 1;
+    }
+
+    linhas_fractal.append("====================================================\n");
+    return join_str(linhas_fractal, "\n");
+}
+
+
+# --- Nucleo 6: Fractal do Tapete de Sierpinski (desenho em SVG + previa em ASCII) ---
+# O programa original desenha com turtle em uma janela; aqui o mesmo algoritmo
+# recursivo gera um desenho SVG (abre no navegador) e uma previa em texto.
+
+# Quadrado preenchido centrado em (x, y). Coordenadas como no turtle (origem no
+# centro, y para cima), convertidas para SVG (origem no canto, y para baixo).
+func desenhar_quadrado(x, y, tamanho, cor) {
+    var sx = x - tamanho / 2 + 160;
+    var sy = 160 - (y + tamanho / 2);
+    return "<rect x=\"" + format(sx, 2) + "\" y=\"" + format(sy, 2) + "\" width=\"" + format(tamanho, 2)
+         + "\" height=\"" + format(tamanho, 2) + "\" fill=\"" + cor + "\"/>";
+}
+
+# Algoritmo recursivo que desenha os centros brancos do tapete
+func desenhar_tapete_sierpinski(x, y, lado, grau) {
+    if (grau <= 0) {
+        return "";
+    }
+
+    # Desenha o quadrado central "vazio" (branco)
+    var tamanho_centro = lado / 3;
+    var svg = desenhar_quadrado(x, y, tamanho_centro, "white");
+
+    var novo_lado = lado / 3;
+    var novo_grau = grau - 1;
+
+    # Chamadas recursivas para os 8 sub-quadrados perifericos
+    svg = svg + desenhar_tapete_sierpinski(x - novo_lado, y + novo_lado, novo_lado, novo_grau);
+    svg = svg + desenhar_tapete_sierpinski(x, y + novo_lado, novo_lado, novo_grau);
+    svg = svg + desenhar_tapete_sierpinski(x + novo_lado, y + novo_lado, novo_lado, novo_grau);
+
+    svg = svg + desenhar_tapete_sierpinski(x - novo_lado, y, novo_lado, novo_grau);
+    svg = svg + desenhar_tapete_sierpinski(x + novo_lado, y, novo_lado, novo_grau);
+
+    svg = svg + desenhar_tapete_sierpinski(x - novo_lado, y - novo_lado, novo_lado, novo_grau);
+    svg = svg + desenhar_tapete_sierpinski(x, y - novo_lado, novo_lado, novo_grau);
+    svg = svg + desenhar_tapete_sierpinski(x + novo_lado, y - novo_lado, novo_lado, novo_grau);
+    return svg;
+}
+
+# Previa em texto: a celula (x, y) e um "furo" se, em alguma escala, ocupa o
+# centro de um bloco 3x3 (digitos iguais a 1 na base 3 nas duas coordenadas)
+func tapete_ascii(n) {
+    var linhas = [];
+    var y = 0;
+    while (y < n) {
+        var linha = "";
+        var x = 0;
+        while (x < n) {
+            var a = x;
+            var b = y;
+            var furo = false;
+            while (a > 0 || b > 0) {
+                if (a % 3 == 1 && b % 3 == 1) {
+                    furo = true;
+                }
+                a = a // 3;
+                b = b // 3;
+            }
+            if (furo) {
+                linha = linha + "  ";
+            } else {
+                linha = linha + "##";
+            }
+            x = x + 1;
+        }
+        linhas.append(linha);
+        y = y + 1;
+    }
+    return join_str(linhas, "\n");
+}
+
+func trabalhador_sierpinski() {
+    # 1. Fundo preto e bloco principal inicial (azul)
+    var lado_inicial = 300;
+    var svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"320\" height=\"320\" viewBox=\"0 0 320 320\">";
+    svg = svg + "<rect width=\"320\" height=\"320\" fill=\"black\"/>";
+    svg = svg + desenhar_quadrado(0, 0, lado_inicial, "navy");
+
+    # 2. Executa a perfuracao recursiva (grau 4)
+    svg = svg + desenhar_tapete_sierpinski(0, 0, lado_inicial, 4) + "</svg>";
+
+    return [svg, tapete_ascii(27)];
+}
+
+# --- 3.1 Execucao Sequencial ---
+# Modo Sequencial: 1 unico nucleo processa as 160 avaliacoes e gera o fractal
+func execucao_sequencial() {
+    print("--- 1. Executando Modo Sequencial (Apenas 1 Núcleo) ---");
+    var inicio = clock();
+    var resultados = trabalhador_nucleo("Professor", tarefas);
+
+    # Calcula o fractal no mesmo nucleo
+    texto_fractal = trabalhador_fractal();
+    return clock() - inicio;
+}
+
+# --- 3.2 Execucao Paralela Com Alocacao Manual de Nucleos (Fork & Join) ---
+# Modo Paralelo: aloca 1 subtarefa (nucleo de CPU) para cada avaliador
+func execucao_paralela() {
+    print("--- 2. Executando Modo Paralelo (6 Núcleos Dedicados) ---");
+
+    # Divisao das 160 tarefas em 4 fatias iguais de 40 tarefas
+    var tamanho_fatia = len(tarefas) // len(AVALIADORES);
+
+    var inicio = clock();
+
+    # ETAPA 1: FORK - cada avaliador em um nucleo da CPU
+    fork professor = trabalhador_nucleo(AVALIADORES[0], slice(tarefas, 0, tamanho_fatia)) on core 0;
+    fork monitor1 = trabalhador_nucleo(AVALIADORES[1], slice(tarefas, tamanho_fatia, 2 * tamanho_fatia)) on core 1;
+    fork monitor2 = trabalhador_nucleo(AVALIADORES[2], slice(tarefas, 2 * tamanho_fatia, 3 * tamanho_fatia)) on core 2;
+    fork monitor3 = trabalhador_nucleo(AVALIADORES[3], slice(tarefas, 3 * tamanho_fatia, 4 * tamanho_fatia)) on core 3;
+    fork fractal = trabalhador_fractal() on core 4;
+    fork sierpinski = trabalhador_sierpinski() on core 5;
+
+    # ETAPA 2: JOIN - aguarda cada nucleo e junta os resultados
+    var resultados_finais = join professor;
+    resultados_finais = resultados_finais + join monitor1;
+    resultados_finais = resultados_finais + join monitor2;
+    resultados_finais = resultados_finais + join monitor3;
+    texto_fractal = join fractal;
+
+    # Renderizacao do 6o nucleo: grava o desenho SVG
+    var desenho = join sierpinski;
+    write_file("tapete_sierpinski.svg", desenho[0]);
+    texto_sierpinski = desenho[1];
+    print("-> [Núcleo 6] Tapete de Sierpinski renderizado com sucesso em tapete_sierpinski.svg!");
+
+    return clock() - inicio;
+}
+
+# ==============================================================================
+# PASSO 4: BENCHMARK E EXIBICAO DOS RESULTADOS
+# ==============================================================================
+
+print("Carga de Trabalho: " + TOTAL_ATIVIDADES + " atividades + Mandelbrot (ASCII) + Sierpinski (SVG)\n");
+
+# 1. Medindo tempo sequencial
+var tempo_seq = execucao_sequencial();
+print("Tempo Sequencial Concluído em: " + format(tempo_seq, 2) + " segundos\n");
+
+# 2. Medindo tempo paralelo real (usando multiplos nucleos de CPU)
+var tempo_par = execucao_paralela();
+print("Tempo Paralelo Concluído em:   " + format(tempo_par, 2) + " segundos\n");
+# Exibe a saida do fractal gerado no processamento paralelo
+print(texto_fractal);
+
+# Previa do Tapete de Sierpinski (o desenho completo esta em tapete_sierpinski.svg)
+print("=== TAPETE DE SIERPINSKI (Gerado pelo Núcleo 6) ===");
+print(texto_sierpinski);
+print("====================================================\n");
+
+
+# 3. Metricas do Benchmark
+var speedup = tempo_seq / tempo_par;
+var reducao_pct = ((tempo_seq - tempo_par) / tempo_seq) * 100;
+
+print("==========================================");
+print("         BENCHMARK DE DESEMPENHO          ");
+print("==========================================");
+print("Núcleos Utilizados (Paralelo) : 6");
+print("Tempo Sequencial             : " + format(tempo_seq, 2) + " s");
+print("Tempo Paralelo               : " + format(tempo_par, 2) + " s");
+print("Aceleração (Speedup)         : " + format(speedup, 2) + "x mais rápido!");
+print("Redução de Tempo             : " + format(reducao_pct, 1) + "%");
+print("==========================================");

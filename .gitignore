@@ -21,3 +21,4 @@ __pycache__
 !/temp_code/.gitkeep
 /temp_code/*
 .venv/
+tapete_sierpinski.svg
