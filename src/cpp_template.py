@@ -14,6 +14,11 @@ _CPP_HEADER = """\
 #include <algorithm>
 #include <charconv>
 #include <iomanip>
+#include <future>
+#ifndef _WIN32
+  #include <pthread.h>
+  #include <sched.h>
+#endif
 
 #ifdef _WIN32
   #include <winsock2.h>
@@ -241,6 +246,54 @@ inline double __to_number(const T& x) {
 inline double __clock() {
     using namespace std::chrono;
     return duration<double>(steady_clock::now().time_since_epoch()).count();
+}
+
+// ---------------------------------------------------------------------------
+// Fork / Join: cada fork vira uma tarefa assincrona (std::async) com o resultado
+// em um std::shared_future; join espera (wait) ou recolhe o valor (get).
+// ---------------------------------------------------------------------------
+inline int __num_nucleos() {
+    unsigned n = std::thread::hardware_concurrency();
+    return n ? static_cast<int>(n) : 1;
+}
+
+// Fixa a thread atual em um nucleo da CPU (core < 0: deixa o sistema escolher)
+inline void __fixar_nucleo(long long core) {
+    if (core < 0) return;
+    int n = __num_nucleos();
+    int c = static_cast<int>(core % n);
+    if (core >= n) {
+        std::lock_guard<std::mutex> lock(__print_mutex());
+        std::cerr << "[AVISO] Nucleo " << core << " nao existe (esta maquina tem " << n
+                  << "); usando o nucleo " << c << "." << std::endl;
+    }
+#ifdef _WIN32
+    SetThreadAffinityMask(GetCurrentThread(), static_cast<DWORD_PTR>(1) << c);
+#else
+    cpu_set_t conjunto;
+    CPU_ZERO(&conjunto);
+    CPU_SET(c, &conjunto);
+    pthread_setaffinity_np(pthread_self(), sizeof(conjunto), &conjunto);
+#endif
+}
+
+// nucleo(): numero do nucleo da CPU em que a thread atual esta executando
+inline long long __nucleo() {
+#ifdef _WIN32
+    return static_cast<long long>(GetCurrentProcessorNumber());
+#else
+    return static_cast<long long>(sched_getcpu());
+#endif
+}
+
+// fork: os argumentos ja foram copiados para a tarefa (captura por valor), entao a
+// subtarefa trabalha sobre seus proprios dados, como um processo independente
+template<typename F>
+auto __fork(long long core, F tarefa) {
+    return std::async(std::launch::async, [core, tarefa]() mutable {
+        __fixar_nucleo(core);
+        return tarefa();
+    }).share();
 }
 
 // a + b: soma numerica, concatenacao de texto (convertendo o outro lado) ou de listas

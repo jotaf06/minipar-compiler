@@ -116,7 +116,7 @@ class C_Semantico(ISemantico):
         if isinstance(node, MethodCall):
             return "unknown"
         if isinstance(node, FuncCallExpr):
-            if node.name in ("random", "exp", "len", "to_int", "to_number", "clock"): return "number"
+            if node.name in ("random", "exp", "len", "to_int", "to_number", "clock", "nucleo"): return "number"
             if node.name in ("range", "parse_ints"): return "list"
             if node.name in ("join_str", "str", "format"): return "string"
             if node.name == "slice" and node.arguments: return self._infer_type(node.arguments[0])
@@ -379,7 +379,7 @@ class C_Semantico(ISemantico):
         self._tarefas = []
 
     FUNCOES_NATIVAS = ("exp", "random", "range", "len", "to_number", "parse_ints", "slice", "join_str",
-                       "str", "format", "to_int", "clock")
+                       "str", "format", "to_int", "clock", "nucleo")
 
     # ---- Tipos das listas (elemento C++) ----
     def _init_declarado(self, obj: ASTNode) -> Optional[ASTNode]:
@@ -452,7 +452,7 @@ class C_Semantico(ISemantico):
 
     # ---- Inferencia numerica (int x float), para escolher o tipo C++ ----
     FUNCOES_REAIS = ("exp", "random", "clock", "to_number")
-    FUNCOES_INTEIRAS = ("len", "to_int")
+    FUNCOES_INTEIRAS = ("len", "to_int", "nucleo")
 
     def _numeric_kind(self, node: Optional[ASTNode]) -> Optional[str]:
         """Retorna "int", "float" ou None (nao numerico ou desconhecido)."""

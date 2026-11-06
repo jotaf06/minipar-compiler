@@ -6,7 +6,8 @@ from ast_nodes import (
     UnaryExpr, NumberExpr, StringExpr, BoolExpr, IdentifierExpr, IfStmt, WhileStmt,
     DoWhileStmt, ForStmt, BreakStmt, ContinueStmt, InputExpr,
     ClassDecl, FuncDecl, ReturnStmt, MethodCall, FuncCallExpr, PropertyAccess, PropertyAssign, NewExpr, ThisExpr,
-    CChannelExpr, SendStmt, ReceiveExpr, ListLiteral, MatrixCreateExpr, IndexExpr, IndexAssign
+    CChannelExpr, SendStmt, ReceiveExpr, ListLiteral, MatrixCreateExpr, IndexExpr, IndexAssign,
+    ForkStmt, JoinStmt, JoinExpr
 )
 
 class C_GeradorTAC(IGeradorTAC):
@@ -102,6 +103,10 @@ class C_GeradorTAC(IGeradorTAC):
             else:
                 self._emit(f"{tmp} = input()")
             return tmp
+        if isinstance(node, JoinExpr):
+            tmp = self._temp()
+            self._emit(f"{tmp} = join {node.handle}")
+            return tmp
         return "?"
 
     def _stmt(self, node: Optional[ASTNode]) -> None:
@@ -119,6 +124,18 @@ class C_GeradorTAC(IGeradorTAC):
                 self._emit(f"print {self._expr(arg)}")
         elif isinstance(node, SendStmt):
             self._emit(f"send {self._expr(node.channel)}, {self._expr(node.message)}")
+        elif isinstance(node, ForkStmt):
+            # Mesmo formato de "call", mas a chamada vira uma subtarefa paralela
+            args = node.call.arguments
+            nome = node.call.name if isinstance(node.call, FuncCallExpr) \
+                else f"{self._expr(node.call.object)}.{node.call.method_name}"
+            for arg in args:
+                self._emit(f"param {self._expr(arg)}")
+            destino = f", core {self._expr(node.core)}" if node.core is not None else ""
+            self._emit(f"{node.handle} = fork {nome}, {len(args)}{destino}")
+        elif isinstance(node, JoinStmt):
+            for h in node.handles_resolvidos:
+                self._emit(f"join {h}")
         elif isinstance(node, (SeqBlock, ParBlock)):
             for stmt in node.statements: self._stmt(stmt)
         elif isinstance(node, IfStmt):
