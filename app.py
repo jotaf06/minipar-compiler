@@ -21,6 +21,10 @@ from test_orchestrator import (
 
 app = Flask(__name__)
 
+# API v2: uma rota por fase do compilador (interface web didatica)
+from api_v2 import api_v2
+app.register_blueprint(api_v2)
+
 # Configuração de Diretórios
 TESTS_DIR = 'tests'
 OUTPUT_DIR = 'output'
