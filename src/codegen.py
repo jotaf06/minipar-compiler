@@ -100,6 +100,8 @@ class C_GeradorCpp(IGeradorCpp):
                 return f"__str({args})"
             if node.name == "format":
                 return f"__format({args})"
+            if node.name == "write_file":
+                return f"__write_file({args})"
             if node.name == "nucleo":
                 return "__nucleo()"
             if node.name == "clock":
@@ -168,16 +170,36 @@ class C_GeradorCpp(IGeradorCpp):
                 pilha.extend(getattr(atual, f.name) for f in dataclasses.fields(atual))
         return encontrados
 
+    FUNCOES_PURAS = ("exp", "len", "range", "str", "format", "to_int", "to_number",
+                     "slice", "join_str", "parse_ints")
+
+    def _expressao_pura(self, expr: Optional[ASTNode]) -> bool:
+        """Expressao sem efeitos colaterais (pode ser reavaliada no computador remoto)."""
+        for no in self._nos(expr):
+            if isinstance(no, FuncCallExpr) and no.name not in self.FUNCOES_PURAS:
+                return False
+            if isinstance(no, (MethodCall, InputExpr, ReceiveExpr, CChannelExpr, JoinExpr)):
+                return False
+        return True
+
     def _gerar_suporte_remoto(self, program: Program) -> str:
         """Funcoes usadas pelo modo trabalhador (--worker) para atender forks remotos."""
         # 0. Assinatura do programa: o trabalhador recusa pedidos de outra versao do programa
         #    (os forks remotos sao numerados; outra versao executaria a funcao errada)
         assinatura = hashlib.sha1(repr(program).encode("utf-8")).hexdigest()[:16]
         codigo = f'extern const char* const __ASSINATURA_PROGRAMA = "{assinatura}";\n\n'
-        # 1. Globais tambem precisam ser inicializadas no computador remoto
+        # 1. Globais tambem precisam ser inicializadas no computador remoto, mas apenas
+        #    as de expressao pura (sem chamar funcoes do programa, input, receive...):
+        #    "var t = execucao_sequencial();" nao pode rodar de novo no trabalhador
+        #    e que so dependem de globais tambem inicializadas aqui (criterio transitivo:
+        #    "speedup = tempo_seq / tempo_par" depende de valores calculados so no principal)
         codigo += "void __iniciar_globais() {\n"
+        inicializadas = set()
         for node in program.statements:
-            if self._global_tipada(node):
+            if self._global_tipada(node) and self._expressao_pura(node.init_value) and all(
+                    no.name in inicializadas for no in self._nos(node.init_value)
+                    if isinstance(no, IdentifierExpr)):
+                inicializadas.add(node.name)
                 expr = self._translate_expression(node.init_value) if node.init_value else "{}"
                 codigo += f"    {node.name} = {expr};\n"
         codigo += "}\n\n"

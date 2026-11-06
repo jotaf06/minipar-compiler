@@ -1,0 +1,139 @@
+# Programa de Teste 8 - MiniPar 2026.2
+# Algoritmo de Avaliacao de Atividades Didaticas em Paralelo com 4 Avaliadores
+# (Professor e tres Monitores), cada um alocado a um nucleo da CPU via fork/join.
+
+# ==============================================================================
+# PASSO 1: RECURSOS NATIVOS
+# ==============================================================================
+
+# --- 1.1 Gerador de Numeros Pseudoaleatorios (LCG) ---
+class GeradorAleatorio {
+    var estado = 123456789;
+
+    # Gera um decimal aleatorio entre 'minimo' e 'maximo'
+    func uniforme(minimo, maximo) {
+        this.estado = (this.estado * 1103515245 + 12345) & 0x7FFFFFFF;
+        var fracao = this.estado / 2147483647.0;
+        return minimo + (maximo - minimo) * fracao;
+    }
+}
+
+# --- 1.2 Simulacao de Carga de CPU ---
+# Consome ciclos de CPU (espera ativa) durante o tempo de trabalho simulado.
+# ESCALA_TEMPO reduz os segundos simulados para manter a duracao do teste
+# proxima a do programa original em Python.
+var ESCALA_TEMPO = 0.2;
+
+func simular_atraso(segundos) {
+    var fim = clock() + segundos * ESCALA_TEMPO;
+    var ciclos = 0;
+    while (clock() < fim) {
+        ciclos = ciclos + 1;
+    }
+    return ciclos;
+}
+
+# ==============================================================================
+# PASSO 2: CONFIGURACAO DO CENARIO
+# ==============================================================================
+
+var NUM_ALUNOS = 40;
+var ATIVIDADES_POR_ALUNO = 4;
+var TOTAL_ATIVIDADES = NUM_ALUNOS * ATIVIDADES_POR_ALUNO;   # 160 atividades
+
+var AVALIADORES = ["Professor", "Monitor 1", "Monitor 2", "Monitor 3"];
+
+# Criamos as 160 tarefas a serem corrigidas
+var tarefas = [];
+var aluno = 0;
+while (aluno < NUM_ALUNOS) {
+    var atividade = 0;
+    while (atividade < ATIVIDADES_POR_ALUNO) {
+        tarefas.append("Aluno " + (aluno + 1) + " - Atividade " + (atividade + 1));
+        atividade = atividade + 1;
+    }
+    aluno = aluno + 1;
+}
+
+# ==============================================================================
+# PASSO 3: FUNCOES DE TRABALHO DOS NUCLEOS
+# ==============================================================================
+
+# Simula a correcao de uma atividade individual
+func avaliar_atividade(tarefa, avaliador, gerador) {
+    var tempo_correcao = gerador.uniforme(0.05, 0.15);
+    simular_atraso(tempo_correcao);
+    return "[" + avaliador + "] Concluiu: " + tarefa;
+}
+
+# Funcao executada de forma independente por cada nucleo da CPU
+func trabalhador_nucleo(avaliador, lote_tarefas) {
+    var gerador = new GeradorAleatorio();
+    var resultados_locais = [];
+    for (var tarefa in lote_tarefas) {
+        resultados_locais.append(avaliar_atividade(tarefa, avaliador, gerador));
+    }
+    # Devolve a lista de atividades corrigidas ao processo principal (join)
+    return resultados_locais;
+}
+
+# --- 3.1 Execucao Sequencial ---
+# Modo Sequencial: 1 unico nucleo resolve todas as 160 tarefas
+func execucao_sequencial() {
+    print("--- 1. Executando Modo Sequencial (Apenas 1 Núcleo / Professor) ---");
+    var inicio = clock();
+    var resultados = trabalhador_nucleo("Professor", tarefas);
+    return clock() - inicio;
+}
+
+# --- 3.2 Execucao Paralela Com Alocacao Manual de Nucleos (Fork & Join) ---
+# Modo Paralelo: aloca 1 subtarefa (nucleo de CPU) para cada avaliador
+func execucao_paralela() {
+    print("--- 2. Executando Modo Paralelo (4 Núcleos Dedicados: Professor + 3 Monitores) ---");
+
+    # Divisao das 160 tarefas em 4 fatias iguais de 40 tarefas
+    var tamanho_fatia = len(tarefas) // len(AVALIADORES);
+
+    var inicio = clock();
+
+    # ETAPA 1: FORK - cada avaliador em um nucleo da CPU
+    fork professor = trabalhador_nucleo(AVALIADORES[0], slice(tarefas, 0, tamanho_fatia)) on core 0;
+    fork monitor1 = trabalhador_nucleo(AVALIADORES[1], slice(tarefas, tamanho_fatia, 2 * tamanho_fatia)) on core 1;
+    fork monitor2 = trabalhador_nucleo(AVALIADORES[2], slice(tarefas, 2 * tamanho_fatia, 3 * tamanho_fatia)) on core 2;
+    fork monitor3 = trabalhador_nucleo(AVALIADORES[3], slice(tarefas, 3 * tamanho_fatia, 4 * tamanho_fatia)) on core 3;
+
+    # ETAPA 2: JOIN - aguarda cada nucleo e junta os resultados
+    var resultados_finais = join professor;
+    resultados_finais = resultados_finais + join monitor1;
+    resultados_finais = resultados_finais + join monitor2;
+    resultados_finais = resultados_finais + join monitor3;
+
+    return clock() - inicio;
+}
+
+# ==============================================================================
+# PASSO 4: BENCHMARK E EXIBICAO DOS RESULTADOS
+# ==============================================================================
+
+print("Total de Atividades a Avaliar: " + TOTAL_ATIVIDADES + " (40 alunos x 4 atividades)\n");
+
+# 1. Medindo tempo sequencial
+var tempo_seq = execucao_sequencial();
+print("Tempo Sequencial Concluído em: " + format(tempo_seq, 2) + " segundos\n");
+
+# 2. Medindo tempo paralelo real (usando multiplos nucleos de CPU)
+var tempo_par = execucao_paralela();
+print("Tempo Paralelo Concluído em:   " + format(tempo_par, 2) + " segundos\n");
+
+# 3. Metricas do Benchmark
+var speedup = tempo_seq / tempo_par;
+var reducao_pct = ((tempo_seq - tempo_par) / tempo_seq) * 100;
+
+print("==========================================");
+print("         BENCHMARK DE DESEMPENHO          ");
+print("==========================================");
+print("Tempo Sequencial : " + format(tempo_seq, 2) + " s");
+print("Tempo Paralelo   : " + format(tempo_par, 2) + " s");
+print("Aceleração       : " + format(speedup, 2) + "x mais rápido!");
+print("Redução no tempo : " + format(reducao_pct, 1) + "% de economia");
+print("==========================================");
