@@ -379,6 +379,8 @@ class C_GeradorCpp(IGeradorCpp):
     def gerar(self, programa: Program) -> str:
         program = programa
         cpp_code = _CPP_HEADER
+        # Marcador usado pela interface didatica para mostrar primeiro o codigo do programa
+        cpp_code += "// ===== Codigo gerado a partir do programa MiniPar =====\n"
 
         # Declaracao antecipada das classes: globais e funcoes podem referencia-las
         for node in program.statements:
@@ -422,7 +424,6 @@ class C_GeradorCpp(IGeradorCpp):
                 else: cpp_code += self._translate_statement(node.body, "    ")
                 cpp_code += "}\n\n"
 
-        cpp_code += self._gerar_suporte_remoto(program)
         cpp_code += "int main(int argc, char** argv) {\n    #ifdef _WIN32\n        WSADATA wsa;\n        WSAStartup(MAKEWORD(2,2), &wsa);\n    #endif\n\n"
         # Modo trabalhador (fork remoto): ./programa --worker PORTA
         cpp_code += ("    if (argc >= 3 && std::string(argv[1]) == \"--worker\") {\n"
@@ -438,5 +439,9 @@ class C_GeradorCpp(IGeradorCpp):
                 if isinstance(node, SeqBlock):
                     for stmt in node.statements: cpp_code += self._translate_statement(stmt, "    ")
                 else: cpp_code += self._translate_statement(node, "    ")
-        cpp_code += "\n    return 0;\n}\n"
+        cpp_code += "\n    return 0;\n}\n\n"
+        # Suporte ao fork remoto depois do main (declarado no template): o codigo do
+        # programa aparece primeiro para quem le o C++ gerado
+        cpp_code += "// ----- Suporte ao fork remoto (modo --worker) -----\n"
+        cpp_code += self._gerar_suporte_remoto(program)
         return cpp_code

@@ -103,6 +103,27 @@ Os arquivos gerados (`.cpp`, `.tac` e executáveis) serão armazenados na pasta 
 
 ---
 
+## Interfaces do Compilador
+
+O MiniPar 2026.2 mantém as interfaces do 2026.1 e acrescenta uma segunda interface web, didática:
+
+| Interface | Como abrir | Público |
+|---|---|---|
+| Terminal | `python main.py` → opção 1, ou `python main.py arquivo.minipar` | desenvolvedor |
+| IDE Web (2026.1) | `python main.py` → opção 2 → http://127.0.0.1:5000 | desenvolvedor |
+| **Interface Didática (2026.2)** | `python main.py` → opção 2 → **http://127.0.0.1:5000/didatico** | alunos iniciantes |
+
+A interface didática mostra cada fase da compilação em um botão, na ordem do pipeline:
+**1 Tokens · 2 AST · 3 Semântica · 4 TAC · 5 C++ · 6 Compilar (baixar executável) · 7 Executar**.
+Cada fase traz uma explicação curta do que o compilador faz nela; erros aparecem com fase, linha e
+coluna e são destacados no editor. A AST é desenhada como árvore gráfica (D3.js): nós coloridos por
+categoria, recolher/expandir com clique, zoom e arrastar, e clique no nó destaca a linha no código.
+Links diretos: `/didatico?exemplo=teste6_quicksort_classes.minipar&fase=ast`.
+
+A interface usa a API v2 (`/api/v2/...`, uma rota por fase), descrita em `api_v2.py`.
+
+---
+
 ## Fases do Compilador
 
 | Fase | Interface | Componente | Entrada → Saída |
