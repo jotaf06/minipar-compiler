@@ -22,3 +22,6 @@ __pycache__
 /temp_code/*
 .venv/
 tapete_sierpinski.svg
+
+# resultados gerados por ./run_tests.sh
+/tests/resultados/
