@@ -32,7 +32,11 @@ minipar_python/
 │   └── cpp_template.py    # Template base em C++ (threads, sockets, listas)
 ├── static/               # Arquivos estáticos da IDE Web (CSS, JS)
 ├── templates/            # Arquivos HTML da IDE Web
-├── tests/                # Exemplos e testes .minipar
+├── tests/                # Programas de teste .minipar e testes automatizados
+│   ├── unitarios/        # Testes de unidade por componente + C_Controle + API v2
+│   ├── integracao/       # Testes ponta a ponta dos programas .minipar
+│   └── executar_testes.py# Executa tudo e gera tests/resultados/RESULTADOS.md
+├── run_tests.sh          # Atalho para tests/executar_testes.py
 ├── output/               # Arquivos gerados (.cpp, .tac e executáveis)
 ├── temp_code/            # Códigos temporários executados pela IDE
 ├── app.py                # Servidor Flask da Interface Web
@@ -147,6 +151,35 @@ resultado = icontrole.compilar(codigo_fonte, "programa")
 O `ResultadoCompilacao` devolvido guarda o produto de cada fase (tokens, AST, tabela de símbolos, TAC, C++, executável) e os erros com fase, linha e coluna. Se uma fase falhar, as seguintes não executam, mas o que já foi produzido continua disponível.
 
 Erros léxicos e sintáticos interrompem a compilação no primeiro erro; o analisador semântico reporta todos os erros encontrados de uma vez.
+
+---
+
+## Testes Automatizados
+
+Os testes usam o `unittest` da biblioteca padrão (também são reconhecidos pelo `pytest`).
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # uma vez
+./run_tests.sh            # todos os testes (~1,5 min: compila e executa os programas com g++)
+./run_tests.sh --rapido   # só unidade e C_Controle (poucos segundos, sem g++)
+```
+
+Ao final é gerado `tests/resultados/RESULTADOS.md`, com a tabela usada no relatório:
+testes por componente (passaram/falharam/tempo) e, para cada programa `.minipar`,
+se compila, o tempo de compilação e de execução e o resultado.
+
+| Arquivo | O que testa |
+|---|---|
+| `tests/unitarios/test_lexico.py` | `C_Lexico`: tokens, literais, operadores, linha/coluna, erros léxicos |
+| `tests/unitarios/test_sintatico.py` | `C_Sintatico`: precedência, comandos, classes, fork/join, erros sintáticos |
+| `tests/unitarios/test_semantico.py` | `C_Semantico` e `C_TabelaSimbolos`: escopos, tipos, chamadas, regras de fork/join |
+| `tests/unitarios/test_tac.py` | `C_GeradorTAC`: temporários, rótulos, laços, funções, fork/join |
+| `tests/unitarios/test_cpp.py` | `C_GeradorCpp` e `C_CompiladorGcc`: C++ gerado, despacho remoto, erros do g++ |
+| `tests/unitarios/test_controle.py` | `C_Controle`: ordem das fases, resultado parcial em erro, componentes trocados via interface |
+| `tests/unitarios/test_api_v2.py` | Rotas da API v2 usadas pela interface didática |
+| `tests/integracao/test_programas.py` | Testes 1–10, adicionais e recursos: compila, executa e confere a saída; fork remoto com um trabalhador em localhost |
+
+Um módulo isolado: `.venv/bin/python -m unittest discover -s tests/unitarios -p "test_lexico.py" -v`.
 
 ---
 
