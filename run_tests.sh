@@ -14,7 +14,8 @@ else
     PYTHON=python3
 fi
 
-if ! "$PYTHON" -c "import flask" 2>/dev/null; then
+# Flask so e necessario para os testes da API (pulados com --rapido)
+if [[ " $* " != *" --rapido "* ]] && ! "$PYTHON" -c "import flask" 2>/dev/null; then
     echo "[ERRO] Flask nao encontrado. Crie o ambiente virtual:" >&2
     echo "  python3 -m venv .venv && .venv/bin/pip install -r requirements.txt" >&2
     exit 2

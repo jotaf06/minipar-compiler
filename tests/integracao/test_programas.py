@@ -55,8 +55,17 @@ PROGRAMAS = {
     "recursos/recurso_strings_listas.minipar": "",
 }
 
-# Preenchido durante a execucao; lido por tests/executar_testes.py para o relatorio
+# Preenchido durante a execucao; lido por tests/executar_testes.py para o relatorio:
+# nome do programa -> compilou, tempos, avisos e os testes (metodos) que o executaram
 RELATORIO = {}
+
+
+def nucleos_disponiveis():
+    """Nucleos que este processo pode usar (em conteiner/CI pode ser menos que os da maquina)."""
+    try:
+        return len(os.sched_getaffinity(0))
+    except AttributeError:          # Windows e macOS
+        return os.cpu_count() or 1
 
 
 def nome_programa(arquivo):
@@ -89,7 +98,8 @@ class Trabalhador:
                     pronto.set()
             pronto.set()
 
-        threading.Thread(target=ler, daemon=True).start()
+        self._leitor = threading.Thread(target=ler, daemon=True)
+        self._leitor.start()
         if not pronto.wait(10) or self.proc.poll() is not None:
             self.encerrar()
             raise RuntimeError("Trabalhador nao iniciou: " + "".join(self.linhas))
@@ -98,6 +108,8 @@ class Trabalhador:
         if self.proc.poll() is None:
             self.proc.kill()
         self.proc.wait(5)
+        # Com o processo encerrado o pipe fecha: espera a leitura das ultimas linhas
+        self._leitor.join(5)
 
     def __enter__(self):
         return self
@@ -114,6 +126,8 @@ class TestProgramas(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.pasta = tempfile.mkdtemp(prefix="minipar_integracao_")
+        # Cleanup (e nao tearDownClass): roda mesmo se a compilacao abaixo falhar
+        cls.addClassCleanup(shutil.rmtree, cls.pasta, ignore_errors=True)
 
         def compilar(arquivo):
             with open(os.path.join(PASTA_TESTES, arquivo), encoding="utf-8") as f:
@@ -122,20 +136,23 @@ class TestProgramas(unittest.TestCase):
             resultado = C_Controle(pasta_saida=cls.pasta).compilar(codigo, nome_programa(arquivo))
             return arquivo, resultado, time.perf_counter() - inicio
 
-        trabalhadores = max(1, min(4, (os.cpu_count() or 2) // 2))
+        trabalhadores = max(1, min(4, nucleos_disponiveis() // 2))
         with ThreadPoolExecutor(trabalhadores) as executor:
             for arquivo, resultado, segundos in executor.map(compilar, PROGRAMAS):
                 cls.compilados[arquivo] = resultado
                 RELATORIO[nome_programa(arquivo)] = {
                     "compilou": resultado.sucesso, "compilacao_s": segundos,
-                    "execucao_s": None, "avisos": len(resultado.avisos)}
-
-    @classmethod
-    def tearDownClass(cls):
-        shutil.rmtree(cls.pasta, ignore_errors=True)
+                    "execucao_s": None, "avisos": len(resultado.avisos), "testes": []}
 
     # ---- apoio ----
+    def registrar(self, arquivo):
+        """Associa este teste ao programa (o relatorio usa o resultado dele na linha do programa)."""
+        testes = RELATORIO[nome_programa(arquivo)]["testes"]
+        if self._testMethodName not in testes:
+            testes.append(self._testMethodName)
+
     def executar(self, arquivo, entrada=None, codigo_esperado=0):
+        self.registrar(arquivo)
         resultado = self.compilados[arquivo]
         self.assertTrue(resultado.sucesso, f"{arquivo} nao compilou: " + "; ".join(map(str, resultado.erros)))
         if entrada is None:
@@ -161,7 +178,7 @@ class TestProgramas(unittest.TestCase):
         par = float(re.search(r"Tempo Paralelo\s*:\s*([\d.]+) s", saida).group(1))
         self.assertGreater(seq, 0)
         self.assertGreater(par, 0)
-        if (os.cpu_count() or 1) >= nucleos:
+        if nucleos_disponiveis() >= nucleos:
             # Com nucleos suficientes, o paralelo precisa ser bem mais rapido
             self.assertGreater(seq / par, 1.5, f"sem ganho de desempenho: {seq} s x {par} s")
         return seq, par
@@ -178,9 +195,12 @@ class TestProgramas(unittest.TestCase):
 
     def test_02_fatorial_fibonacci_par(self):
         saida = self.executar("teste2_fatorial_fibonacci_par.minipar")
-        self.assertIn("Fatorial de 5: 120", saida)
-        inicio = saida.splitlines().index("Fibonacci:")
-        self.assertEqual(saida.splitlines()[inicio + 1:inicio + 9], ["0", "1", "1", "2", "3", "5", "8", "13"])
+        linhas = saida.splitlines()
+        self.assertIn("Fatorial de 5: 120", linhas)
+        # Fatorial e Fibonacci rodam em paralelo (par): a linha do fatorial pode aparecer
+        # em qualquer ponto, mas a sequencia de Fibonacci mantem a ordem
+        depois = linhas[linhas.index("Fibonacci:") + 1:]
+        self.assertEqual([l for l in depois if l.isdigit()], ["0", "1", "1", "2", "3", "5", "8", "13"])
 
     def test_03_neuronio(self):
         saida = self.executar("teste3_neuronio.minipar")
@@ -199,7 +219,8 @@ class TestProgramas(unittest.TestCase):
         saida = self.executar("teste5_recomendacao.minipar")
         depois = saida.split("Produtos recomendados para voce:")[1]
         recomendados = [l.split(" probabilidade")[0] for l in depois.strip().splitlines()]
-        # Mesmos produtos do expected_results (sem acentos, como no programa MiniPar)
+        # Mesmos produtos de expected_results/teste5 (gerado pelo Python original); aqui sem
+        # acentos e com a probabilidade, como o programa MiniPar imprime
         self.assertEqual(recomendados, [
             "Laptop", "Tablet", "Fones de ouvido", "Camisa", "Jaqueta", "Sapatos", "Geladeira",
             "Maquina de lavar", "Ar condicionado", "Nao-ficcao", "Ficcao cientifica", "Fantasia"])
@@ -244,6 +265,7 @@ class TestProgramas(unittest.TestCase):
 
     # ---- Fork em outro computador (trabalhador em localhost) ----
     def executar_com_trabalhador(self, arquivo):
+        self.registrar(arquivo)
         if not porta_livre(PORTA_TRABALHADOR):
             self.skipTest(f"porta {PORTA_TRABALHADOR} ocupada")
         resultado = self.compilados[arquivo]
@@ -268,6 +290,7 @@ class TestProgramas(unittest.TestCase):
         self.assertIn("registro: subtarefa sem retorno", log)   # executou no trabalhador
 
     def test_fork_remoto_sem_trabalhador_falha_com_mensagem(self):
+        self.registrar("recursos/recurso_fork_remoto.minipar")
         if not porta_livre(PORTA_TRABALHADOR):
             self.skipTest(f"porta {PORTA_TRABALHADOR} ocupada")
         resultado = self.compilados["recursos/recurso_fork_remoto.minipar"]
@@ -327,7 +350,7 @@ class TestProgramas(unittest.TestCase):
         saida = self.executar("recursos/recurso_fork_join.minipar")
         self.assertIn("resultados iguais: True", saida)
         nucleos = set(re.findall(r"executou no nucleo (\d+)", saida.split("--- Paralelo")[1]))
-        if (os.cpu_count() or 1) >= 4:
+        if nucleos_disponiveis() >= 4:
             self.assertEqual(nucleos, {"0", "1", "2", "3"})   # "on core" respeitado
 
     # ---- Todos os programas compilam sem erro ----

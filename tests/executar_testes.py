@@ -12,6 +12,7 @@ Codigo de saida: 0 se todos passarem, 1 caso contrario.
 import argparse
 import os
 import platform
+import re
 import subprocess
 import sys
 import time
@@ -37,6 +38,17 @@ SUITES = [
 LENTAS = {"test_api_v2", "test_programas"}
 
 
+def identificar(test):
+    """(modulo, nome) de um teste. Erros de setUpClass/setUpModule chegam como um
+    _ErrorHolder, cujo id e "setUpClass (test_programas.TestProgramas)"."""
+    if isinstance(test, unittest.TestCase):
+        modulo = type(test).__module__
+        return modulo, test.id()[len(modulo) + 1:]
+    descricao = test.id()
+    achado = re.search(r"\((\w+)[.)]", descricao)
+    return (achado.group(1) if achado else "?"), descricao
+
+
 class ResultadoComTempo(unittest.TextTestResult):
     """Registra situacao e duracao de cada teste."""
 
@@ -49,9 +61,10 @@ class ResultadoComTempo(unittest.TextTestResult):
         self._inicio = time.perf_counter()
         super().startTest(test)
 
-    def _registrar(self, test, situacao, detalhe=""):
+    def _registrar(self, test, situacao, detalhe="", nome=None):
+        modulo, teste = identificar(test)
         self.registros.append({
-            "modulo": type(test).__module__, "teste": test.id().split(".", 1)[-1],
+            "modulo": modulo, "teste": nome or teste, "metodo": getattr(test, "_testMethodName", ""),
             "situacao": situacao, "segundos": time.perf_counter() - self._inicio, "detalhe": detalhe})
 
     def addSuccess(self, test):
@@ -64,8 +77,16 @@ class ResultadoComTempo(unittest.TextTestResult):
 
     def addError(self, test, err):
         super().addError(test, err)
-        # Erro em setUpClass chega com um _ErrorHolder, sem modulo de teste
         self._registrar(test, "erro", self._exc_info_to_string(err, test))
+
+    def addSubTest(self, test, subtest, err):
+        # Subteste que falha nao passa por addFailure/addError, e o teste "pai" nao
+        # recebe addSuccess: cada subteste com falha vira um registro proprio
+        super().addSubTest(test, subtest, err)
+        if err is not None:
+            situacao = "falhou" if issubclass(err[0], test.failureException) else "erro"
+            self._registrar(test, situacao, self._exc_info_to_string(err, test),
+                            nome=identificar(test)[1] + " " + subtest._subDescription())
 
     def addSkip(self, test, reason):
         super().addSkip(test, reason)
@@ -80,6 +101,13 @@ class ResultadoComTempo(unittest.TextTestResult):
         self._registrar(test, "falhou", "sucesso inesperado")
 
 
+def nucleos_disponiveis():
+    try:
+        return len(os.sched_getaffinity(0))
+    except AttributeError:
+        return os.cpu_count() or 1
+
+
 def versao_gpp():
     try:
         return subprocess.run(["g++", "--version"], capture_output=True, text=True).stdout.splitlines()[0]
@@ -87,27 +115,31 @@ def versao_gpp():
         return "g++ nao encontrado"
 
 
-def modulo_do_registro(r):
-    modulo = r["modulo"]
-    if modulo in dict((s[0], s) for s in SUITES):
-        return modulo
-    # _ErrorHolder (falha em setUpClass): o modulo aparece no id do teste
-    for nome, *_ in SUITES:
-        if nome in r["teste"]:
-            return nome
-    return modulo
+def situacao_do_programa(info, situacao_metodo):
+    """Resultado de um programa a partir dos testes que o executaram."""
+    if not info["compilou"]:
+        return "❌"
+    situacoes = [situacao_metodo[m] for m in info["testes"] if m in situacao_metodo]
+    if not situacoes:
+        return "⚠️ nao testado"
+    if any(s in ("falhou", "erro") for s in situacoes):
+        return "❌"
+    if all(s == "ignorado" for s in situacoes):
+        return "ignorado"
+    return "✅"
 
 
 def gerar_relatorio(registros, suites, duracao, caminho):
     por_modulo = {}
     for r in registros:
-        por_modulo.setdefault(modulo_do_registro(r), []).append(r)
+        por_modulo.setdefault(r["modulo"], []).append(r)
 
     linhas = [
         "# Resultados dos Testes Automatizados - MiniPar 2026.2",
         "",
         f"- Data: {datetime.now():%d/%m/%Y %H:%M}",
-        f"- Sistema: {platform.system()} {platform.release()} | {os.cpu_count()} nucleos logicos",
+        f"- Sistema: {platform.system()} {platform.release()} | {os.cpu_count()} nucleos logicos"
+        f" ({nucleos_disponiveis()} disponiveis para os testes)",
         f"- Python {platform.python_version()} | {versao_gpp()}",
         f"- Duracao total: {duracao:.1f} s",
         "",
@@ -133,9 +165,13 @@ def gerar_relatorio(registros, suites, duracao, caminho):
 
     if any(s[0] == "test_programas" for s in suites):
         from test_programas import RELATORIO
-        situacao_teste = {}
+        situacao_metodo = {}
         for r in por_modulo.get("test_programas", []):
-            situacao_teste.setdefault(r["teste"].split(".")[-1], r["situacao"])
+            if not r["metodo"]:
+                continue
+            # Uma falha (inclusive de subteste) prevalece sobre o registro de sucesso
+            if situacao_metodo.get(r["metodo"]) not in ("falhou", "erro"):
+                situacao_metodo[r["metodo"]] = r["situacao"]
         linhas += [
             "",
             "## Programas MiniPar (compilacao e execucao)",
@@ -144,13 +180,7 @@ def gerar_relatorio(registros, suites, duracao, caminho):
             "|---|:---:|---:|---:|---:|:---:|",
         ]
         for nome, info in RELATORIO.items():
-            testes = [s for t, s in situacao_teste.items() if _teste_do_programa(t, nome)]
-            if not info["compilou"] or any(s in ("falhou", "erro") for s in testes):
-                resultado = "❌"
-            elif testes and all(s == "ignorado" for s in testes):
-                resultado = "ignorado"
-            else:
-                resultado = "✅"
+            resultado = situacao_do_programa(info, situacao_metodo)
             execucao = f"{info['execucao_s']:.2f}" if info["execucao_s"] is not None else "-"
             linhas.append(f"| `{nome}` | {'✅' if info['compilou'] else '❌'} | {info['compilacao_s']:.1f} | "
                           f"{execucao} | {info['avisos']} | {resultado} |")
@@ -158,6 +188,11 @@ def gerar_relatorio(registros, suites, duracao, caminho):
                        "em paralelo antes dos testes (esse tempo nao entra na coluna Tempo do resumo). "
                        "Os testes com `on host` iniciam o mesmo executavel em modo `--worker 5400` em "
                        "localhost, fazendo o papel do outro computador."]
+
+    modulos = {m for m, *_ in suites}
+    fora = [r for r in registros if r["modulo"] not in modulos]
+    if fora:
+        linhas += ["", f"**Atencao:** {len(fora)} resultado(s) fora dos modulos listados acima."]
 
     falhas = [r for r in registros if r["situacao"] in ("falhou", "erro")]
     if falhas:
@@ -168,23 +203,6 @@ def gerar_relatorio(registros, suites, duracao, caminho):
     os.makedirs(os.path.dirname(caminho), exist_ok=True)
     with open(caminho, "w", encoding="utf-8") as f:
         f.write("\n".join(linhas) + "\n")
-
-
-# nome do metodo de teste -> trecho do nome do programa que ele exercita
-_MAPA = {
-    "test_01_": "teste1_", "test_02_": "teste2_", "test_03_": "teste3_", "test_04_": "teste4_",
-    "test_05_": "teste5_", "test_06_": "teste6_", "test_07_": "teste7_",
-    "test_08_avaliacao": "teste8_avaliacao", "test_08_remoto": "teste8_remoto",
-    "test_09_": "teste9_", "test_10_": "teste10_", "test_adicional1": "teste_adicional1",
-    "test_adicional2": "teste_adicional2", "test_ascii": "teste_ascii", "test_bnf": "teste_bnf",
-    "test_recurso_numeros": "recurso_numeros", "test_recurso_saida": "recurso_saida",
-    "test_recurso_strings": "recurso_strings", "test_recurso_globais": "recurso_globais",
-    "test_recurso_fork_join": "recurso_fork_join", "test_fork_remoto": "recurso_fork_remoto",
-}
-
-
-def _teste_do_programa(metodo, programa):
-    return any(metodo.startswith(m) and programa.startswith(p) for m, p in _MAPA.items())
 
 
 def main():
