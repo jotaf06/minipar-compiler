@@ -522,14 +522,51 @@
     // ------------------------------------------------------------------
     // Fase 7: Executar
     // ------------------------------------------------------------------
+    // Entradas de exemplo dos programas de teste que usam input() (as mesmas dos
+    // testes automatizados em tests/integracao/test_programas.py).
+    const ENTRADAS_EXEMPLO = {
+        "teste1_calculadora_cliente_servidor.minipar": {
+            pede: "a operação (+, -, * ou /) e os dois operandos, um por linha.",
+            valores: ["+", "5", "7"],
+            resultado: "o servidor calcula 5 + 7 e o cliente imprime Resultado: 12.0.",
+        },
+        "teste5_recomendacao.minipar": {
+            pede: "16 valores 0 ou 1, um por linha, dizendo se o cliente comprou cada produto do catálogo, nesta ordem: " +
+                  "Smartphone, Laptop, Tablet, Fones de ouvido, Camisa, Jeans, Jaqueta, Sapatos, Geladeira, Micro-ondas, " +
+                  "Máquina de lavar, Ar condicionado, Ficção, Não-ficção, Ficção científica, Fantasia.",
+            valores: ["1", "0", "0", "0", "0", "1", "0", "0", "0", "1", "0", "0", "1", "0", "0", "0"],
+            resultado: "o cliente comprou Smartphone, Jeans, Micro-ondas e Ficção; a rede recomenda outros produtos.",
+        },
+        "teste6_quicksort_classes.minipar": {
+            pede: "uma única linha com os números inteiros do vetor, separados por espaço.",
+            valores: ["10 -3 -40 80 70 -100"],
+            resultado: "Vetor ordenado: [-100, -40, -3, 10, 70, 80].",
+        },
+        "teste_bnf_controles_input.minipar": {
+            pede: "nada. A função ler_nome() contém input(), mas o programa principal não a chama; " +
+                  "o exemplo mostra que input() é aceito pela gramática.",
+            valores: [],
+            resultado: "Controle OK: 7 2.",
+        },
+    };
+
     function renderExecutar(conteudo, a) {
         if (!a.sucesso) return faseIndisponivel(conteudo, a, "O programa");
         const usaInput = (a.tokens || []).some((t) => t.tipo === "INPUT");
+        const exemplo = usaInput ? ENTRADAS_EXEMPLO[$("exemplos").value] : null;
+        const dica = exemplo
+            ? `<div class="dica-entrada"><b>O que este programa pede:</b> ${esc(exemplo.pede)}
+               ${exemplo.valores.length ? `<br><b>Exemplo:</b> <code>${exemplo.valores.map(esc).join(" ⏎ ")}</code>
+               <button type="button" class="botao-secundario" id="usar-exemplo">Usar entrada de exemplo</button>` : ""}
+               <div class="nota">${exemplo.valores.length ? "Com essa entrada" : "Saída esperada"}: ${esc(exemplo.resultado)}</div></div>`
+            : "";
         conteudo.innerHTML = `<div class="cartao">
             <label for="entradas"><b>Entradas</b> <span class="nota">(valores para input(), um por linha${usaInput ? " — este programa usa input()" : ""})</span></label>
-            <textarea class="entradas" id="entradas" placeholder="${usaInput ? "ex.: 10 -3 -40 80" : "este programa não lê entradas"}"></textarea>
+            ${dica}
+            <textarea class="entradas" id="entradas" placeholder="${usaInput ? "um valor por linha" : "este programa não lê entradas"}"></textarea>
             <div style="margin-top:10px"><button class="botao-primario" id="botao-executar">▶ Compilar e executar</button></div></div>
             <p class="secao-titulo">Saída</p><div class="terminal" id="terminal"><span class="meta">A saída do programa aparecerá aqui.</span></div>`;
+        if (exemplo && exemplo.valores.length) $("usar-exemplo").addEventListener("click", () => { $("entradas").value = exemplo.valores.join("\n"); });
         $("botao-executar").addEventListener("click", async (ev) => {
             ev.target.disabled = true;
             ev.target.textContent = "Executando...";

@@ -198,6 +198,17 @@ code, .mono { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; }
 .botao-primario { background: var(--primaria); color: #fff; border-color: var(--primaria); padding: 8px 16px; font-weight: 600; cursor: pointer; }
 .botao-primario:hover { filter: brightness(1.08); }
 .botao-primario:disabled { opacity: .6; cursor: wait; }
+.dica-entrada {
+    background: var(--primaria-suave); border-radius: 8px; padding: 10px 12px; margin: 8px 0;
+    font-size: 13px; line-height: 1.6;
+}
+.dica-entrada code { word-break: break-word; }
+.dica-entrada .nota { margin-top: 4px; }
+.botao-secundario {
+    background: var(--superficie, #fff); color: var(--primaria); border: 1px solid var(--primaria);
+    border-radius: 6px; padding: 2px 10px; margin-left: 6px; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.botao-secundario:hover { background: #fff; filter: brightness(0.97); }
 .entradas { width: 100%; min-height: 70px; padding: 8px; font-family: ui-monospace, Consolas, monospace; resize: vertical; }
 .terminal {
     background: #0f172a; color: #e2e8f0; border-radius: 10px; padding: 14px; min-height: 120px;

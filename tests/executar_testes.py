@@ -6,10 +6,13 @@ Uso (na raiz do projeto; o run_tests.sh faz isso):
     .venv/bin/python tests/executar_testes.py                 # todos os testes
     .venv/bin/python tests/executar_testes.py --rapido        # sem integracao e sem API (nao chama o g++)
     .venv/bin/python tests/executar_testes.py --saida arq.md  # outro arquivo de relatorio
+    .venv/bin/python tests/executar_testes.py --json relatorio/dados/resultados.json
+                                        # tambem grava os numeros em JSON (lido pelo relatorio Typst)
 
 Codigo de saida: 0 se todos passarem, 1 caso contrario.
 """
 import argparse
+import json
 import os
 import platform
 import re
@@ -129,7 +132,12 @@ def situacao_do_programa(info, situacao_metodo):
     return "✅"
 
 
-def gerar_relatorio(registros, suites, duracao, caminho):
+def gerar_relatorio(registros, suites, duracao, caminho, caminho_json=None):
+    dados = {"data": f"{datetime.now():%d/%m/%Y %H:%M}",
+             "sistema": f"{platform.system()} {platform.release()}",
+             "nucleos": os.cpu_count(), "nucleos_disponiveis": nucleos_disponiveis(),
+             "python": platform.python_version(), "gpp": versao_gpp(),
+             "duracao_s": round(duracao, 1), "componentes": [], "programas": []}
     por_modulo = {}
     for r in registros:
         por_modulo.setdefault(r["modulo"], []).append(r)
@@ -160,6 +168,10 @@ def gerar_relatorio(registros, suites, duracao, caminho):
         pasta = "integracao" if modulo == "test_programas" else "unitarios"
         linhas.append(f"| {tipo} | {componente} | `tests/{pasta}/{modulo}.py` | {len(rs)} | {ok} | "
                       f"{falhas} | {ignorados} | {tempo:.1f} |")
+        dados["componentes"].append({"tipo": tipo, "componente": componente,
+                                     "arquivo": f"tests/{pasta}/{modulo}.py", "testes": len(rs),
+                                     "passaram": ok, "falharam": falhas, "ignorados": ignorados,
+                                     "tempo_s": round(tempo, 1)})
     linhas.append(f"| | **Total** | | **{totais[0]}** | **{totais[1]}** | **{totais[2]}** | "
                   f"**{totais[3]}** | **{duracao:.1f}** |")
 
@@ -184,6 +196,11 @@ def gerar_relatorio(registros, suites, duracao, caminho):
             execucao = f"{info['execucao_s']:.2f}" if info["execucao_s"] is not None else "-"
             linhas.append(f"| `{nome}` | {'✅' if info['compilou'] else '❌'} | {info['compilacao_s']:.1f} | "
                           f"{execucao} | {info['avisos']} | {resultado} |")
+            dados["programas"].append({
+                "programa": nome, "compilou": info["compilou"],
+                "compilacao_s": round(info["compilacao_s"], 1),
+                "execucao_s": None if info["execucao_s"] is None else round(info["execucao_s"], 2),
+                "avisos": info["avisos"], "resultado": resultado})
         linhas += ["", "Compilacao: todas as fases (lexico ate g++ -O3), com ate 4 programas compilados "
                        "em paralelo antes dos testes (esse tempo nao entra na coluna Tempo do resumo). "
                        "Os testes com `on host` iniciam o mesmo executavel em modo `--worker 5400` em "
@@ -203,14 +220,22 @@ def gerar_relatorio(registros, suites, duracao, caminho):
     os.makedirs(os.path.dirname(caminho), exist_ok=True)
     with open(caminho, "w", encoding="utf-8") as f:
         f.write("\n".join(linhas) + "\n")
+    if caminho_json:
+        dados["falhas"] = len(falhas)
+        os.makedirs(os.path.dirname(os.path.abspath(caminho_json)), exist_ok=True)
+        with open(caminho_json, "w", encoding="utf-8") as f:
+            json.dump(dados, f, ensure_ascii=False, indent=2)
 
 
 def main():
     args = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     args.add_argument("--rapido", action="store_true", help="pula integracao e API (sem g++)")
     args.add_argument("--saida", default=os.path.join(PASTA, "resultados", "RESULTADOS.md"))
+    args.add_argument("--json", help="tambem grava os resultados em JSON neste caminho")
     args.add_argument("-q", "--quieto", action="store_true", help="nao lista cada teste")
     opcoes = args.parse_args()
+    if opcoes.json:
+        opcoes.json = os.path.abspath(opcoes.json)
 
     os.chdir(RAIZ)
     suites = [s for s in SUITES if not (opcoes.rapido and s[0] in LENTAS)]
@@ -222,7 +247,7 @@ def main():
     resultado = executor.run(tudo)
     duracao = time.perf_counter() - inicio
 
-    gerar_relatorio(resultado.registros, suites, duracao, opcoes.saida)
+    gerar_relatorio(resultado.registros, suites, duracao, opcoes.saida, opcoes.json)
     print(f"\nTabela de resultados: {os.path.relpath(opcoes.saida, RAIZ)}")
     return 0 if resultado.wasSuccessful() else 1
 
